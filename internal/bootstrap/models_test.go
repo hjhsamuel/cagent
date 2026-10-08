@@ -2,15 +2,29 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"reflect"
 
 	"testing"
 
+	"github.com/hjhsamuel/cagent/internal/apperrors"
 	"github.com/hjhsamuel/cagent/internal/config"
 	"github.com/hjhsamuel/cagent/internal/storage/schema"
 )
 
 type fakeModels map[string]schema.Model
+
+func (f fakeModels) WriteModel(ctx context.Context, old, updated *schema.Model) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if updated == nil {
+		delete(f, old.ID)
+	} else {
+		f[updated.ID] = *updated
+	}
+	return nil
+}
 
 func (f fakeModels) ListModels(_ context.Context) ([]schema.Model, error) {
 	var out []schema.Model
@@ -57,14 +71,32 @@ func TestMongoModelCatalogHasNoDefault(t *testing.T) {
 	}
 }
 
+func TestMongoModelCatalogAllowsEmptyUntilUse(t *testing.T) {
+	c, ring, _ := modelFixture(t)
+	loaded, err := loadModels(context.Background(), fakeModels{}, c, ring)
+	if err != nil {
+		t.Fatal("empty model catalog prevented startup", err)
+	}
+	if loaded.Models == nil {
+		t.Fatal("empty model catalog was not initialized")
+	}
+	if err := loaded.Validate(); err != nil {
+		t.Fatal("empty model catalog invalidated service config", err)
+	}
+	if _, err := loaded.Models.Select(""); !errors.Is(err, apperrors.ErrInvalidArgument) {
+		t.Fatal("selection without models must fail", err)
+	}
+	if _, err := loaded.Models.Bind("missing", "key"); !errors.Is(err, apperrors.ErrNotFound) {
+		t.Fatal("missing bound model must fail", err)
+	}
+}
+
 func TestMongoModelCatalogFailsClosed(t *testing.T) {
-	for _, mode := range []string{"empty", "budget", "timeout", "thinking"} {
+	for _, mode := range []string{"budget", "timeout", "thinking"} {
 		t.Run(mode, func(t *testing.T) {
 			c, ring, docs := modelFixture(t)
 			d := docs["main"]
 			switch mode {
-			case "empty":
-				docs = fakeModels{}
 			case "bad_ciphertext":
 				d.APIKeys[0].Ciphertext = "bad"
 			case "missing_nonce":
@@ -78,13 +110,47 @@ func TestMongoModelCatalogFailsClosed(t *testing.T) {
 			case "thinking":
 				d.Options.Thinking.Key = "messages"
 			}
-			if mode != "empty" {
-				docs["main"] = d
-			}
+			docs["main"] = d
 			loaded, err := loadModels(context.Background(), docs, c, ring)
 			if err == nil || !reflect.DeepEqual(loaded, config.Config{}) {
 				t.Fatal("invalid directory returned partial config")
 			}
 		})
+	}
+}
+
+func TestModelManagementValidatesFullBudgetAndPublishes(t *testing.T) {
+	cfg, ring, docs := modelFixture(t)
+	loaded, err := loadModels(context.Background(), docs, cfg, ring)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := modelManagement{cfg: loaded, db: docs}
+	doc := docs["main"]
+	input := config.ModelInput{Model: "updated-vendor", Provider: doc.Provider, BaseURL: doc.BaseURL, Options: doc.Options, APIKeys: []config.ModelKeyInput{{ID: config.StoredKeyID(doc.APIKeys[0]), Weight: 1}}}
+	// Valid metadata but insufficient room after tool/safety reservations.
+	input.Options.WindowTokens = 5000
+	if _, err := m.Put(context.Background(), "main", input); !errors.Is(err, apperrors.ErrInvalidArgument) {
+		t.Fatal("insufficient budget accepted", err)
+	}
+	if docs["main"].Model != doc.Model {
+		t.Fatal("invalid budget persisted")
+	}
+	input.Options.WindowTokens = doc.Options.WindowTokens
+	if _, err := m.Put(context.Background(), "main", input); err != nil {
+		t.Fatal(err)
+	}
+	selected, err := loaded.Models.Bind("main", input.APIKeys[0].ID)
+	if err != nil || selected.Agent.Model != "updated-vendor" {
+		t.Fatal("runtime did not receive update", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	input.Model = "canceled"
+	if _, err := m.Put(ctx, "main", input); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if got, _ := m.Get(context.Background(), "main"); got.Model != "updated-vendor" {
+		t.Fatal("canceled write published")
 	}
 }

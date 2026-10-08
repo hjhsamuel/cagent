@@ -15,7 +15,7 @@ cagent 是使用 Go 构建的多租户、多用户 Agent 服务。它通过 HTTP
 | 持久化与恢复 | MongoDB 事务、版本校验、租约 Fence 和幂等回执；启动扫描未完成运行及未结算任务 |
 | 运行保障 | 并发容量控制、日志脱敏与轮转、健康检查、指标、本地有界追踪和优雅关闭 |
 
-MCP 当前支持 HTTP Streamable Transport 的工具发现与普通调用，不支持 MCP tasks。A2A 支持 JSON-RPC 即时结果、长任务观察、取消和暂停交互。服务不提供登录、JWT 签发或 A2A 服务端。
+MCP 当前支持 HTTP Streamable Transport 的工具发现与普通调用，不支持 MCP tasks。A2A 支持 JSON-RPC 即时结果、长任务观察、取消和暂停交互。服务支持 API 登录生成随机身份 JWT，不提供 A2A 服务端。
 
 ## 代码目录结构
 
@@ -102,7 +102,7 @@ MongoDB 保存 `sessions`、`messages`、`runs`、`events`、`tasks`、`context_
 - Go 工具链满足 [go.mod](go.mod) 的版本要求，当前声明为 `1.27.1`。
 - 可访问的 MongoDB 副本集或支持事务的 mongos；standalone 不受支持，本地也应初始化副本集。
 - 可用的 OpenAI 兼容模型端点，以及匹配该模型的 Token 编码、窗口和输出预算。
-- 可信身份服务签发的 HS256 JWT。
+- 本服务登录接口或可信身份服务签发的 HS256 JWT。
 
 以下示例在仓库根目录使用 PowerShell 执行。
 
@@ -154,7 +154,9 @@ CAGENT_LOG_PATH=./logs/cagent.log
 }
 ```
 
-此文档只演示结构，地址和模型名是占位值。编码可选 `cl100k_base` 或 `o200k_base`；窗口必须大于输出、工具与安全预留之和。启动时加载模型并校验模型参数，密钥在使用时校验；普通模型配置修改后需重启，HTTP 密钥轮换立即生效并同步写入 `.env`。配置及密钥轮换见 [模型配置](docs/models.md)。
+此文档只演示结构，地址和模型名是占位值。编码可选 `cl100k_base` 或 `o200k_base`；窗口必须大于输出、工具与安全预留之和。启动时加载模型并校验模型参数，密钥在使用时校验；直接修改 MongoDB 后需重启，通过运维 HTTP 管理模型配置则保存后本实例立即生效。HTTP AES 密钥轮换立即生效并同步写入 `.env`。配置及密钥轮换见 [模型配置](docs/models.md)。
+
+模型管理接口无需认证：`GET /debug/models` 查询目录，`GET /debug/models/:modelID` 查询配置，`PUT /debug/models/:modelID` 新增或完整替换配置，`DELETE /debug/models/:modelID` 删除配置。PUT 支持提交供应商 API key 明文并自动加密，响应不返回明文或密文。`POST /debug/model-keys/rotate` 轮换 AES 加密密钥。模型管理和密钥轮换接口在装配对应依赖后注册。请求示例见 [模型配置 HTTP API](docs/models.md#模型配置-http-api)。
 
 ### 启动服务
 
@@ -180,7 +182,9 @@ Invoke-RestMethod http://127.0.0.1:8080/readyz
 
 ### 创建会话、提交运行和读取输出
 
-可信签发方使用配置的 JWT secret 签发令牌，包含非空 `sub`、`tenant_id` 和有效 `exp`，例如以下声明结构：
+调用 `POST /api/v1/auth/login`，无需鉴权、账号密码或请求体，取响应中的 `token`。每次调用生成随机用户 ID 和租户 ID；请保存并复用原 token 访问同一作用域的资源。配置和调用方式见 [登录与 JWT 签发](docs/http.md#登录与-jwt-签发)。登录 token 仅用于业务 API，模型管理无需认证。
+
+也可由可信签发方使用配置的 JWT secret 签发令牌，包含非空 `sub`、`tenant_id` 和有效 `exp`，例如以下声明结构：
 
 ```json
 {"sub":"example-user","tenant_id":"example-tenant","exp":2000000000}
@@ -231,7 +235,7 @@ Run 状态为 `queued`、`running`、`waiting_tool`、`completed`、`failed` 或
 
 ### HTTP 接口速查
 
-业务接口均要求 `Authorization: Bearer <JWT>`，资源不存在或无权限统一返回 `404`。
+登录接口无需鉴权；其他业务接口均要求 `Authorization: Bearer <JWT>`，资源不存在或无权限统一返回 `404`。
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
@@ -264,7 +268,7 @@ CAGENT_TOOLS_FILE=./docs/tools.example.json
 
 默认日志级别为 `info`，文本日志写入 `/app/logs/cagent.log`，单文件 50 MiB，保留 3 个压缩备份；本地可使用前述 `./logs/cagent.log`。通过 `CAGENT_LOG_LEVEL/PATH/SIZE/ROLL` 调整。
 
-默认单实例上限为 64 个 Run、16 个模型请求、32 个任务观察请求和 256 个 SSE 订阅，等待工具的 Run 也占运行容量。设置独立的 `CAGENT_HTTP_DIAGNOSTICS_TOKEN` 后启用 `/debug/metrics` 和 `/debug/traces`，使用该运维 Bearer 凭据访问。追踪仅保留本实例最近 256 条已结束 span。详见 [运行保障](docs/operations.md)。
+默认单实例上限为 64 个 Run、16 个模型请求、32 个任务观察请求和 256 个 SSE 订阅，等待工具的 Run 也占运行容量。默认启用 `/debug/metrics` 和 `/debug/traces`，无需认证。追踪仅保留本实例最近 256 条已结束 span。详见 [运行保障](docs/operations.md)。
 
 ## 开发检查
 

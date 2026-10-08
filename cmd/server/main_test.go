@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -8,6 +10,7 @@ import (
 
 	"testing"
 
+	"github.com/hjhsamuel/cagent/internal/apperrors"
 	"github.com/sirupsen/logrus"
 )
 
@@ -18,6 +21,20 @@ func TestMissingBusinessConfiguration(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("invalid config must fail before opening log: %v", err)
+	}
+}
+
+func TestStartupErrorShowsSafeDetails(t *testing.T) {
+	err := apperrors.Wrap(apperrors.ErrUnsupported, "mongodb.topology", "transactions require a replica set or mongos", errors.New("private-credentials"))
+	text := startupError(err)
+	if !strings.Contains(text, "mongodb.topology") || !strings.Contains(text, "replica set") || strings.Contains(text, "private-credentials") {
+		t.Fatal("unsafe or missing startup diagnosis")
+	}
+	if text := startupError(errors.New("private-credentials")); strings.Contains(text, "private-credentials") {
+		t.Fatal("raw error leaked")
+	}
+	if text := startupError(context.DeadlineExceeded); !strings.Contains(text, "timed out") {
+		t.Fatal("timeout diagnosis missing")
 	}
 }
 

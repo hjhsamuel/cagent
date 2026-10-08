@@ -28,12 +28,12 @@ type Config struct {
 
 // HTTP 定义服务监听与 SSE 生命周期参数，不控制后台 Run 的生命周期。
 type HTTP struct {
-	// JWT 只验证外部签发的令牌；服务不提供登录或令牌签发接口。
+	// JWT 用于验证与签发 HS256 令牌。
 	JWT JWT
+	// Login 控制 API 登录接口生成的 JWT 有效期。
+	Login Login
 	// MaxSubscriptions 限制本实例 SSE 连接，超限在发送流头前返回 503。
 	MaxSubscriptions int
-	// DiagnosticsToken 是独立运维 Bearer 凭据；空值关闭指标和追踪接口。
-	DiagnosticsToken string
 	// WriteTimeout 限制单次 SSE 写入，避免慢客户端永久占用订阅。
 	WriteTimeout time.Duration
 	MaxBodyBytes int
@@ -114,7 +114,7 @@ func Defaults() Config {
 	return Config{
 		Capacity: Capacity{Runs: 64, Models: 16, Observations: 32},
 		Logging:  Logging{Level: "info", Path: "/app/logs/cagent.log", Size: 50, Rolls: 3},
-		HTTP:     HTTP{MaxSubscriptions: 256, Address: "127.0.0.1:8080", SSEHeartbeat: 15 * time.Second, ShutdownGrace: 30 * time.Second, WriteTimeout: 10 * time.Second, MaxBodyBytes: 1 << 20},
+		HTTP:     HTTP{Login: Login{TokenTTL: time.Hour}, MaxSubscriptions: 256, Address: "127.0.0.1:8080", SSEHeartbeat: 15 * time.Second, ShutdownGrace: 30 * time.Second, WriteTimeout: 10 * time.Second, MaxBodyBytes: 1 << 20},
 		MongoDB:  MongoDB{Database: "cagent"},
 		Agent:    Agent{Name: "cagent", MaxTokensField: "max_tokens", RequestTimeout: 2 * time.Minute},
 		Tasks:    Tasks{PollInterval: 2 * time.Second, ObservationTimeout: 30 * time.Second, ReconnectBackoff: time.Second},

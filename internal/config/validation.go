@@ -20,6 +20,9 @@ func invalid(field, message string) error {
 // 加载与直接构造的配置共用此入口，错误均可用 errors.Is/As 判断及提取字段路径。
 // 这里只验证进程配置的结构和组合；外部连接、授权与 SDK 能力由后续装配/适配器验证。
 func (c Config) Validate() error {
+	if err := c.HTTP.Login.Validate(); err != nil {
+		return err
+	}
 	if err := c.Capacity.Validate(); err != nil {
 		return err
 	}

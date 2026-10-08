@@ -3,7 +3,6 @@ package httpapi
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
@@ -45,6 +44,11 @@ func New(service app.Service, events Events, cfg config.HTTP, agentName string, 
 
 // NewWithKeyRotation 在现有 HTTP 服务提供运维密钥轮换。
 func NewWithKeyRotation(service app.Service, events Events, cfg config.HTTP, agentName string, rotate func(context.Context) (string, error), ready func(context.Context) bool, taskInputs ...TaskInputs) (http.Handler, error) {
+	return NewWithModelManagement(service, events, cfg, agentName, nil, rotate, ready, taskInputs...)
+}
+
+// NewWithModelManagement adds instance-wide model administration without authentication.
+func NewWithModelManagement(service app.Service, events Events, cfg config.HTTP, agentName string, models ModelManagement, rotate func(context.Context) (string, error), ready func(context.Context) bool, taskInputs ...TaskInputs) (http.Handler, error) {
 	if err := cfg.ValidateServer(); err != nil {
 		return nil, err
 	}
@@ -87,29 +91,27 @@ func NewWithKeyRotation(service app.Service, events Events, cfg config.HTTP, age
 		}
 		c.JSON(200, gin.H{"status": "ready"})
 	})
-	// 运维凭据与用户 JWT 分离，不允许普通租户读取实例级观测信息。
-	if cfg.DiagnosticsToken != "" {
-		admin := r.Group("/debug", func(c *gin.Context) {
-			if subtle.ConstantTimeCompare([]byte(c.GetHeader("Authorization")), []byte("Bearer "+cfg.DiagnosticsToken)) != 1 {
-				unauthorized(c)
+	// 运维接口直接注册，当前不进行身份认证。
+	admin := r.Group("/debug")
+	admin.GET("/metrics", gin.WrapH(observability.Default))
+	if models != nil {
+		registerModelRoutes(admin, models)
+	}
+	if rotate != nil {
+		admin.POST("/model-keys/rotate", func(c *gin.Context) {
+			version, err := rotate(c.Request.Context())
+			if err != nil {
+				failure(c, 500, "model_key_rotation_failed")
 				return
 			}
-			c.Next()
+			c.JSON(200, gin.H{"version": version})
 		})
-		admin.GET("/metrics", gin.WrapH(observability.Default))
-		if rotate != nil {
-			admin.POST("/model-keys/rotate", func(c *gin.Context) {
-				version, err := rotate(c.Request.Context())
-				if err != nil {
-					failure(c, 500, "model_key_rotation_failed")
-					return
-				}
-				c.JSON(200, gin.H{"version": version})
-			})
-		}
-		admin.GET("/traces", func(c *gin.Context) { c.JSON(200, observability.Default.Spans()) })
 	}
-	api := r.Group("/api/v1", func(c *gin.Context) {
+	admin.GET("/traces", func(c *gin.Context) { c.JSON(200, observability.Default.Spans()) })
+	api := r.Group("/api/v1")
+	// Login issues the first token and must be registered before JWT middleware.
+	registerLoginRoute(api, cfg)
+	api.Use(func(c *gin.Context) {
 		parts := strings.Fields(c.GetHeader("Authorization"))
 		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
 			unauthorized(c)

@@ -50,3 +50,41 @@ func TestGetModelFromMongoDB(t *testing.T) {
 		t.Fatal("missing model did not fail", err)
 	}
 }
+
+func TestWriteModelSnapshotPrecondition(t *testing.T) {
+	db, _ := testDatabase(t)
+	ctx := context.Background()
+	doc := schema.Model{ID: "managed", Model: "original", Provider: "GLM", BaseURL: "https://example.invalid/v1", APIKeys: []schema.EncryptedKey{{ID: "key", Version: "v1", Ciphertext: "encrypted", Nonce: "nonce", Weight: 1}}, Options: schema.ModelConfig{Thinking: schema.Thinking{Enabled: true, Key: "thinking", Value: map[string]any{"z": true, "a": "enabled"}}}}
+	if err := db.WriteModel(ctx, nil, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.WriteModel(ctx, nil, &doc); !errors.Is(err, apperrors.ErrConflict) {
+		t.Fatal("duplicate create accepted", err)
+	}
+	updated := doc
+	updated.Model = "updated"
+	if err := db.WriteModel(ctx, &doc, &updated); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.WriteModel(ctx, &doc, &updated); !errors.Is(err, apperrors.ErrConflict) {
+		t.Fatal("stale update accepted", err)
+	}
+	if err := db.WriteModel(ctx, &doc, nil); !errors.Is(err, apperrors.ErrConflict) {
+		t.Fatal("stale delete accepted", err)
+	}
+	db.beforeCommit = func(string) error { return errors.New("commit failed") }
+	if err := db.WriteModel(ctx, &updated, &doc); err == nil {
+		t.Fatal("failed commit accepted")
+	}
+	db.beforeCommit = nil
+	got, err := db.GetModel(ctx, doc.ID)
+	if err != nil || got.Model != updated.Model {
+		t.Fatal("failed transaction changed model", err)
+	}
+	if err := db.WriteModel(ctx, &updated, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.GetModel(ctx, doc.ID); !errors.Is(err, apperrors.ErrNotFound) {
+		t.Fatal("model not deleted", err)
+	}
+}

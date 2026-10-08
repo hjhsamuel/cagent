@@ -28,9 +28,6 @@ type SelectedModel struct {
 }
 
 func NewModelCatalog(docs []schema.Model, name string, ring *Keyring) (*ModelCatalog, error) {
-	if len(docs) == 0 {
-		return nil, invalid("models", "at least one MongoDB model is required")
-	}
 	c := &ModelCatalog{byID: make(map[string]schema.Model), ring: ring, name: name}
 	for _, doc := range docs {
 		// 隔离调用方修改文档、切片和嵌套思考配置。

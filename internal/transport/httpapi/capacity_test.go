@@ -56,27 +56,18 @@ func TestSSECapacityDisconnectAndReconnect(t *testing.T) {
 	}
 }
 
-func TestDiagnosticsRequireSeparateCredentialAndOverloadMapping(t *testing.T) {
+func TestDiagnosticsWithoutAuthenticationAndOverloadMapping(t *testing.T) {
 	cfg := settings()
-	cfg.DiagnosticsToken = strings.Repeat("operator-secret-", 3)
 	h := handler(t, &stubService{err: apperrors.ErrOverloaded}, stubEvents{}, cfg)
 	for _, path := range []string{"/debug/metrics", "/debug/traces"} {
 		for _, credential := range []string{"", token(t), "wrong"} {
-			if w := request(h, "GET", path, "", credential); w.Code != 401 {
+			if w := request(h, "GET", path, "", credential); w.Code != 200 {
 				t.Fatal(path, w.Code)
 			}
-		}
-		w := request(h, "GET", path, "", cfg.DiagnosticsToken)
-		if w.Code != 200 || strings.Contains(w.Body.String(), cfg.DiagnosticsToken) {
-			t.Fatal(w.Code, w.Body.String())
 		}
 	}
 	w := request(h, "POST", "/api/v1/sessions", "", token(t))
 	if w.Code != 503 || w.Header().Get("Retry-After") != "1" || len(w.Header().Get("X-Trace-ID")) != 32 {
 		t.Fatal(w.Code, w.Header())
-	}
-	disabled := handler(t, new(stubService), stubEvents{}, settings())
-	if w := request(disabled, "GET", "/debug/metrics", "", cfg.DiagnosticsToken); w.Code != 404 {
-		t.Fatal("diagnostics enabled by default")
 	}
 }

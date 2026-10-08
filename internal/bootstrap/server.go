@@ -85,7 +85,7 @@ func Run(parent context.Context, cfg config.Config) error {
 		return err
 	}
 	var stopping atomic.Bool
-	handler, err := httpapi.NewWithKeyRotation(application, events, cfg.HTTP, cfg.Agent.Name, modelKeyRotation(cfg.Models, db), func(ctx context.Context) bool {
+	handler, err := httpapi.NewWithModelManagement(application, events, cfg.HTTP, cfg.Agent.Name, modelManagement{cfg: cfg, db: db}, modelKeyRotation(cfg.Models, db), func(ctx context.Context) bool {
 		if stopping.Load() {
 			return false
 		}

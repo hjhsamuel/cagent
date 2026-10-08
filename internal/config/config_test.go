@@ -54,7 +54,7 @@ func TestDefaultsAndRequiredDeploymentSettings(t *testing.T) {
 	want := config.Config{
 		Capacity: config.Capacity{Runs: 64, Models: 16, Observations: 32},
 		Logging:  config.Logging{Level: "info", Path: "/app/logs/cagent.log", Size: 50, Rolls: 3},
-		HTTP:     config.HTTP{MaxSubscriptions: 256, Address: "127.0.0.1:8080", SSEHeartbeat: 15 * time.Second, ShutdownGrace: 30 * time.Second, WriteTimeout: 10 * time.Second, MaxBodyBytes: 1 << 20},
+		HTTP:     config.HTTP{Login: config.Login{TokenTTL: time.Hour}, MaxSubscriptions: 256, Address: "127.0.0.1:8080", SSEHeartbeat: 15 * time.Second, ShutdownGrace: 30 * time.Second, WriteTimeout: 10 * time.Second, MaxBodyBytes: 1 << 20},
 		MongoDB:  config.MongoDB{Database: "cagent"},
 		Agent:    config.Agent{Name: "cagent", MaxTokensField: "max_tokens", RequestTimeout: 2 * time.Minute},
 		Tasks:    config.Tasks{PollInterval: 2 * time.Second, ObservationTimeout: 30 * time.Second, ReconnectBackoff: time.Second},
@@ -117,7 +117,7 @@ func TestEveryEnvironmentOverride(t *testing.T) {
 	want := config.Config{
 		Capacity: config.Capacity{Runs: 64, Models: 16, Observations: 32},
 		Logging:  config.Logging{Level: "debug", Path: "logs/custom.log", Size: 10, Rolls: 0},
-		HTTP:     config.HTTP{MaxSubscriptions: 256, Address: "[::1]:9090", SSEHeartbeat: 750 * time.Millisecond, ShutdownGrace: 90 * time.Second, WriteTimeout: 10 * time.Second, MaxBodyBytes: 1 << 20},
+		HTTP:     config.HTTP{Login: config.Login{TokenTTL: time.Hour}, MaxSubscriptions: 256, Address: "[::1]:9090", SSEHeartbeat: 750 * time.Millisecond, ShutdownGrace: 90 * time.Second, WriteTimeout: 10 * time.Second, MaxBodyBytes: 1 << 20},
 		MongoDB:  config.MongoDB{URI: values["CAGENT_MONGODB_URI"], Database: "custom"},
 		Agent:    config.Agent{Name: "assistant", MaxTokensField: "max_tokens", RequestTimeout: 2 * time.Minute},
 		Tasks:    config.Tasks{PollInterval: 3 * time.Second, ObservationTimeout: 45 * time.Second, ReconnectBackoff: 1500 * time.Millisecond},
@@ -282,7 +282,8 @@ func TestLoadReadsProcessEnvironment(t *testing.T) {
 		return "", false
 	})
 	for key, value := range map[string]string{
-		"CAGENT_CAPACITY_RUNS": "64", "CAGENT_CAPACITY_MODELS": "16", "CAGENT_CAPACITY_OBSERVATIONS": "32", "CAGENT_HTTP_MAX_SUBSCRIPTIONS": "256",
+		"CAGENT_HTTP_LOGIN_TOKEN_TTL": "1h",
+		"CAGENT_CAPACITY_RUNS":        "64", "CAGENT_CAPACITY_MODELS": "16", "CAGENT_CAPACITY_OBSERVATIONS": "32", "CAGENT_HTTP_MAX_SUBSCRIPTIONS": "256",
 		"CAGENT_LOG_LEVEL": "info", "CAGENT_LOG_PATH": "logs/test.log", "CAGENT_LOG_SIZE": "1", "CAGENT_LOG_ROLL": "2",
 		"CAGENT_HTTP_WRITE_TIMEOUT": "10s", "CAGENT_HTTP_MAX_BODY_BYTES": "1048576", "CAGENT_HTTP_ADDRESS": ":9191", "CAGENT_HTTP_SSE_HEARTBEAT": "10s", "CAGENT_HTTP_SHUTDOWN_GRACE": "20s",
 		"CAGENT_MONGODB_URI": "mongodb://localhost:27017", "CAGENT_MONGODB_DATABASE": "test",

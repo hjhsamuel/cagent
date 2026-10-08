@@ -37,7 +37,6 @@ func LoadFromEnv(lookup func(string) (string, bool), names ...string) (Config, e
 		key string
 		dst *string
 	}{
-		{"CAGENT_HTTP_DIAGNOSTICS_TOKEN", &c.HTTP.DiagnosticsToken},
 		{"CAGENT_TOOLS_FILE", &c.ToolsFile},
 		{"CAGENT_HTTP_ADDRESS", &c.HTTP.Address},
 		{"CAGENT_HTTP_JWT_SECRET", &c.HTTP.JWT.Secret},
@@ -55,6 +54,7 @@ func LoadFromEnv(lookup func(string) (string, bool), names ...string) (Config, e
 		dst        *time.Duration
 	}{
 		{"CAGENT_HTTP_SSE_HEARTBEAT", "http.sse_heartbeat", &c.HTTP.SSEHeartbeat},
+		{"CAGENT_HTTP_LOGIN_TOKEN_TTL", "http.login.token_ttl", &c.HTTP.Login.TokenTTL},
 		{"CAGENT_HTTP_WRITE_TIMEOUT", "http.write_timeout", &c.HTTP.WriteTimeout},
 		{"CAGENT_HTTP_SHUTDOWN_GRACE", "http.shutdown_grace", &c.HTTP.ShutdownGrace},
 		{"CAGENT_TASKS_POLL_INTERVAL", "tasks.poll_interval", &c.Tasks.PollInterval},

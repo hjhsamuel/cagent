@@ -3,12 +3,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/gin-gonic/gin"
+	"github.com/hjhsamuel/cagent/internal/apperrors"
 	"github.com/hjhsamuel/cagent/internal/bootstrap"
 	"github.com/hjhsamuel/cagent/internal/config"
 	"github.com/hjhsamuel/cagent/internal/observability"
@@ -40,8 +42,29 @@ func run(lookup func(string) (string, bool)) int {
 	logrus.WithField("process_id", os.Getpid()).Info("process.starting")
 	if err = bootstrap.Run(ctx, cfg); err != nil {
 		logrus.WithField("process_id", os.Getpid()).WithError(err).Error("process.failed")
+		fmt.Fprintln(os.Stderr, "process.start_failed:", startupError(err))
 		return 1
 	}
 	logrus.WithField("process_id", os.Getpid()).Info("process.stopped")
 	return 0
+}
+
+// startupError 只显示边界提供的安全说明，不回显驱动错误或凭据。
+func startupError(err error) string {
+	var detail *apperrors.Error
+	if errors.As(err, &detail) {
+		return detail.Error()
+	}
+	for _, kind := range []apperrors.Kind{apperrors.ErrInvalidArgument, apperrors.ErrNotFound, apperrors.ErrConflict, apperrors.ErrUnsupported, apperrors.ErrOverloaded} {
+		if errors.Is(err, kind) {
+			return kind.Error()
+		}
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "startup timed out"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "startup cancelled"
+	}
+	return "startup failed; check the configured log file"
 }

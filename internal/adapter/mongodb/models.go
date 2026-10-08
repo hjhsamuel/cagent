@@ -3,6 +3,7 @@ package mongodb
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -11,7 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-// GetModel 只供启动读取管理员维护的全局配置，不暴露于租户 HTTP API。
+// GetModel 读取管理员维护的全局配置，不暴露于租户 HTTP API。
 func (b *Database) GetModel(ctx context.Context, id string) (schema.Model, error) {
 	if strings.TrimSpace(id) == "" {
 		return schema.Model{}, invalid("model.id")
@@ -76,4 +77,54 @@ func decodeModel(raw bson.Raw) (schema.Model, error) {
 		return schema.Model{}, safeError(err)
 	}
 	return doc, nil
+}
+
+// WriteModel applies a catalog snapshot precondition to avoid silently
+// overwriting another instance's changes. Nil old creates; nil updated deletes.
+func (b *Database) WriteModel(ctx context.Context, old, updated *schema.Model) error {
+	if old == nil && updated == nil {
+		return invalid("model")
+	}
+	ctx, cancel := context.WithTimeout(ctx, b.timeout)
+	defer cancel()
+	if old == nil {
+		if strings.TrimSpace(updated.ID) == "" {
+			return invalid("model.id")
+		}
+		_, err := b.collection(ModelCollection).InsertOne(ctx, updated)
+		return safeError(err)
+	}
+	if strings.TrimSpace(old.ID) == "" || (updated != nil && updated.ID != old.ID) {
+		return invalid("model.id")
+	}
+	return b.withTransaction(ctx, "model.configure", func(tx context.Context) error {
+		filter := bson.M{"_id": old.ID}
+		raw, err := b.collection(ModelCollection).FindOne(tx, filter).Raw()
+		if err != nil {
+			return err
+		}
+		current, err := decodeModel(raw)
+		if err != nil {
+			return err
+		}
+		// Canonical JSON comparison ignores BSON object field order, including
+		// nested thinking values, while detecting changes in all known fields.
+		expected, err := json.Marshal(old)
+		if err != nil {
+			return invalid("model")
+		}
+		actual, err := json.Marshal(current)
+		if err != nil {
+			return invalid("model")
+		}
+		if !bytes.Equal(expected, actual) {
+			return conflict("model")
+		}
+		if updated == nil {
+			_, err = b.collection(ModelCollection).DeleteOne(tx, filter)
+		} else {
+			_, err = b.collection(ModelCollection).ReplaceOne(tx, filter, updated)
+		}
+		return err
+	})
 }
