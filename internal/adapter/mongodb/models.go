@@ -3,6 +3,7 @@ package mongodb
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/hjhsamuel/cagent/internal/storage/schema"
@@ -45,6 +46,25 @@ func (b *Database) ListModels(ctx context.Context) ([]schema.Model, error) {
 		return nil, safeError(err)
 	}
 	return docs, nil
+}
+
+// ReplaceModelKeys 原子替换密文，拒绝覆盖并发修改。
+func (b *Database) ReplaceModelKeys(ctx context.Context, old, updated []schema.Model) error {
+	if len(old) != len(updated) {
+		return invalid("model.keys")
+	}
+	return b.withTransaction(ctx, "model.keys.rotate", func(tx context.Context) error {
+		for i, doc := range old {
+			result, err := b.collection(ModelCollection).UpdateOne(tx, bson.M{"_id": doc.ID, "api_keys": doc.APIKeys}, bson.M{"$set": bson.M{"api_keys": updated[i].APIKeys}})
+			if err != nil {
+				return err
+			}
+			if result.MatchedCount != 1 {
+				return errors.New("model keys changed during rotation")
+			}
+		}
+		return nil
+	})
 }
 
 func decodeModel(raw bson.Raw) (schema.Model, error) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -21,7 +22,11 @@ func requiredEnv() map[string]string {
 }
 
 func load(values map[string]string) (config.Config, error) {
-	return config.LoadFromEnv(func(key string) (string, bool) { value, ok := values[key]; return value, ok })
+	var names []string
+	for name := range values {
+		names = append(names, name)
+	}
+	return config.LoadFromEnv(func(key string) (string, bool) { value, ok := values[key]; return value, ok }, names...)
 }
 
 func validConfig(t *testing.T) config.Config {
@@ -55,19 +60,19 @@ func TestDefaultsAndRequiredDeploymentSettings(t *testing.T) {
 		Tasks:    config.Tasks{PollInterval: 2 * time.Second, ObservationTimeout: 30 * time.Second, ReconnectBackoff: time.Second},
 		Context:  config.Context{WindowTokens: 8192, OutputTokens: 2048, ToolTokens: 1024, SafetyTokens: 512, PolicyVersion: "v1", CompressionThresholdPercent: 80, KeepRecentRounds: 2, SummaryWindowTokens: 8192, SummaryOutputTokens: 512},
 	}
-	if got := config.Defaults(); got != want {
+	if got := config.Defaults(); !reflect.DeepEqual(got, want) {
 		t.Fatal("default contract changed")
 	}
 	assertInvalid(t, want.Validate(), "mongodb.uri")
 	got := validConfig(t)
 	want.MongoDB.URI = "mongodb://localhost:27017"
 
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatal("unset environment did not retain defaults")
 	}
 	// 每次加载都从新的默认值开始，不保存前一次调用的覆盖或凭据。
 	got.HTTP.Address = ":9000"
-	if next := validConfig(t); next != want {
+	if next := validConfig(t); !reflect.DeepEqual(next, want) {
 		t.Fatal("configuration leaked across loads")
 	}
 	for key, field := range map[string]string{
@@ -77,7 +82,7 @@ func TestDefaultsAndRequiredDeploymentSettings(t *testing.T) {
 		delete(values, key)
 		c, err := load(values)
 		assertInvalid(t, err, field)
-		if c != (config.Config{}) {
+		if !reflect.DeepEqual(c, config.Config{}) {
 			t.Fatal("partial configuration returned on failure")
 		}
 	}
@@ -118,7 +123,7 @@ func TestEveryEnvironmentOverride(t *testing.T) {
 		Tasks:    config.Tasks{PollInterval: 3 * time.Second, ObservationTimeout: 45 * time.Second, ReconnectBackoff: 1500 * time.Millisecond},
 		Context:  config.Context{WindowTokens: 32000, OutputTokens: 4000, ToolTokens: 2000, SafetyTokens: 500, PolicyVersion: "v2", CompressionThresholdPercent: 80, KeepRecentRounds: 2, SummaryWindowTokens: 8192, SummaryOutputTokens: 512},
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatal("environment override did not reach expected field")
 	}
 	values["CAGENT_CONTEXT_TOOL_TOKENS"], values["CAGENT_CONTEXT_SAFETY_TOKENS"] = "0", "0"
@@ -141,7 +146,7 @@ func TestExplicitBlankStringsAreNotDefaulted(t *testing.T) {
 				values[key] = blank
 				c, err := load(values)
 				assertInvalid(t, err, field)
-				if c != (config.Config{}) {
+				if !reflect.DeepEqual(c, config.Config{}) {
 					t.Fatal("partial configuration returned")
 				}
 			})
@@ -160,7 +165,7 @@ func TestInvalidNumbersAndDurations(t *testing.T) {
 			values[key] = bad
 			c, err := load(values)
 			assertInvalid(t, err, field)
-			if c != (config.Config{}) {
+			if !reflect.DeepEqual(c, config.Config{}) {
 				t.Fatal("partial configuration returned")
 			}
 		}
@@ -174,7 +179,7 @@ func TestInvalidNumbersAndDurations(t *testing.T) {
 			values[key] = bad
 			c, err := load(values)
 			assertInvalid(t, err, field)
-			if c != (config.Config{}) {
+			if !reflect.DeepEqual(c, config.Config{}) {
 				t.Fatal("partial configuration returned")
 			}
 		}
@@ -226,7 +231,7 @@ func TestTokenBudgetBoundariesAndOverflow(t *testing.T) {
 			} else {
 				assertInvalid(t, err, tc.field)
 			}
-			if c != before {
+			if !reflect.DeepEqual(c, before) {
 				t.Fatal("validation mutated configuration")
 			}
 		})
@@ -254,7 +259,7 @@ func TestDirectConfigurationAndSafeErrors(t *testing.T) {
 	c := validConfig(t)
 	c.Agent.Model = " model-${UNCHANGED} "
 	before := c
-	if err := c.Validate(); err != nil || c != before {
+	if err := c.Validate(); err != nil || !reflect.DeepEqual(c, before) {
 		t.Fatal("validation rewrote opaque string")
 	}
 	c.Tasks.ObservationTimeout = 0
@@ -264,7 +269,7 @@ func TestDirectConfigurationAndSafeErrors(t *testing.T) {
 	assertInvalid(t, c.Validate(), "mongodb.uri")
 	zero, err := config.LoadFromEnv(nil)
 	assertInvalid(t, err, "environment")
-	if zero != (config.Config{}) {
+	if !reflect.DeepEqual(zero, config.Config{}) {
 		t.Fatal("nil lookup returned usable configuration")
 	}
 }
@@ -297,7 +302,7 @@ func TestLoadReadsProcessEnvironment(t *testing.T) {
 }
 
 func TestDocumentedExampleLoads(t *testing.T) {
-	// 示例是 key=value 清单，不意味着生产加载器自动支持 dotenv 语法。
+	// 此处按 key=value 清单验证配置键；dotenv 语法由命令入口的 godotenv 解析。
 	file, err := os.Open("../../.env.example")
 	if err != nil {
 		t.Fatal(err)
@@ -322,6 +327,10 @@ func TestDocumentedExampleLoads(t *testing.T) {
 	if err := scanner.Err(); err != nil {
 		t.Fatal(err)
 	}
+	var names []string
+	for name := range values {
+		names = append(names, name)
+	}
 	_, err = config.LoadFromEnv(func(key string) (string, bool) {
 		value, ok := values[key]
 		if !ok {
@@ -329,7 +338,7 @@ func TestDocumentedExampleLoads(t *testing.T) {
 		}
 		delete(values, key)
 		return value, ok
-	})
+	}, names...)
 	if err != nil {
 		t.Fatal(err)
 	}

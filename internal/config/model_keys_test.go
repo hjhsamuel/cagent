@@ -13,7 +13,11 @@ import (
 
 func testRing(t *testing.T, active string) *Keyring {
 	t.Helper()
-	k, err := NewKeyring(ModelEncryption{KeysJSON: `{"v1":"MDEyMzQ1Njc4OWFiY2RlZg==","v2":"ZmVkY2JhOTg3NjU0MzIxMA=="}`, ActiveVersion: active})
+	keys := map[string]string{"v1": "MDEyMzQ1Njc4OWFiY2RlZg=="}
+	if active == "v2" {
+		keys["v2"] = "ZmVkY2JhOTg3NjU0MzIxMA=="
+	}
+	k, err := NewKeyring(ModelEncryption{Keys: keys})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,10 +75,70 @@ func TestAESGCMRotationAndAuthentication(t *testing.T) {
 }
 
 func TestKeyringRejectsInvalidConfig(t *testing.T) {
-	for _, cfg := range []ModelEncryption{{}, {KeysJSON: `null`}, {KeysJSON: `{bad`}, {KeysJSON: `{"v1":"secret-invalid-base64"}`, ActiveVersion: "v1"}, {KeysJSON: `{"v1":"YWJj"}`, ActiveVersion: "v1"}, {KeysJSON: `{"v1":"MDEyMzQ1Njc4OWFiY2RlZg=="}`, ActiveVersion: "missing"}} {
+	for _, cfg := range []ModelEncryption{{}, {Keys: map[string]string{}}, {Keys: map[string]string{"v1": "secret-invalid-base64"}}, {Keys: map[string]string{"v1": "YWJj"}}, {Keys: map[string]string{"missing": "MDEyMzQ1Njc4OWFiY2RlZg=="}}, {Keys: map[string]string{"v01": "MDEyMzQ1Njc4OWFiY2RlZg=="}}, {Keys: map[string]string{"v0": "MDEyMzQ1Njc4OWFiY2RlZg=="}}} {
 		if ring, err := NewKeyring(cfg); err == nil || ring != nil {
 			t.Fatal("invalid keyring accepted")
 		}
+	}
+}
+
+func TestVersionedEnvironmentAndNumericOrdering(t *testing.T) {
+	values := map[string]string{
+		"CAGENT_MODEL_ENCRYPTION_KEY_V2":  "MDEyMzQ1Njc4OWFiY2RlZg==",
+		"CAGENT_MODEL_ENCRYPTION_KEY_V10": "ZmVkY2JhOTg3NjU0MzIxMA==",
+	}
+	reads := map[string]int{}
+	lookup := func(name string) (string, bool) {
+		reads[name]++
+		value, ok := values[name]
+		return value, ok
+	}
+	c, err := LoadModelEncryptionFromEnv(lookup, []string{"PATH=ignored", "CAGENT_MODEL_ENCRYPTION_KEY_V10=ignored", "CAGENT_MODEL_ENCRYPTION_KEY_V2", "CAGENT_MODEL_ENCRYPTION_KEY_V2"})
+	if err != nil || len(c.Keys) != 2 || reads["CAGENT_MODEL_ENCRYPTION_KEY_V2"] != 1 || reads["PATH"] != 0 {
+		t.Fatal("versioned environment not loaded once", err)
+	}
+	ring, err := NewKeyring(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := ring.Encrypt("api-secret", 1)
+	if err != nil || key.Version != "v10" {
+		t.Fatal("highest numeric version not selected", err)
+	}
+	old, err := NewKeyring(ModelEncryption{Keys: map[string]string{"v2": values["CAGENT_MODEL_ENCRYPTION_KEY_V2"]}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := old.Encrypt("api-secret", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain, err := ring.Decrypt(legacy); err != nil || plain != "api-secret" {
+		t.Fatal("older nonconsecutive version cannot decrypt", err)
+	}
+	values["CAGENT_MODEL_ENCRYPTION_KEY_V10"] = ""
+	c, err = LoadModelEncryptionFromEnv(lookup, []string{"CAGENT_MODEL_ENCRYPTION_KEY_V2", "CAGENT_MODEL_ENCRYPTION_KEY_V10"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewKeyring(c); err == nil {
+		t.Fatal("empty newest key silently fell back")
+	}
+}
+
+func TestVersionedEnvironmentRejectsMalformedSuffix(t *testing.T) {
+	for _, suffix := range []string{"", "0", "01", "-1", "1x", "18446744073709551616"} {
+		cfg, err := LoadModelEncryptionFromEnv(func(string) (string, bool) { return "secret-input", true }, []string{modelEncryptionKeyPrefix + suffix})
+		if err != nil {
+			t.Fatal("loading must defer key validation", err)
+		}
+		_, err = NewKeyring(cfg)
+		if err == nil || strings.Contains(err.Error(), "secret-input") {
+			t.Fatal("invalid suffix accepted or leaked")
+		}
+	}
+	if _, err := LoadModelEncryptionFromEnv(nil, nil); err == nil {
+		t.Fatal("nil lookup accepted")
 	}
 }
 

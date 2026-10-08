@@ -27,10 +27,7 @@ func Run(parent context.Context, cfg config.Config) error {
 	if err := cfg.HTTP.ValidateServer(); err != nil {
 		return err
 	}
-	ring, err := config.NewKeyring(cfg.ModelEncryption)
-	if err != nil {
-		return err
-	}
+	ring := config.NewDeferredKeyring(cfg.ModelEncryption)
 	db, err := mongodb.Open(parent, mongodb.Options{URI: cfg.MongoDB.URI, Database: cfg.MongoDB.Database, Timeout: 10 * time.Second})
 	if err != nil {
 		return err
@@ -88,7 +85,7 @@ func Run(parent context.Context, cfg config.Config) error {
 		return err
 	}
 	var stopping atomic.Bool
-	handler, err := httpapi.New(application, events, cfg.HTTP, cfg.Agent.Name, func(ctx context.Context) bool {
+	handler, err := httpapi.NewWithKeyRotation(application, events, cfg.HTTP, cfg.Agent.Name, modelKeyRotation(cfg.Models, db), func(ctx context.Context) bool {
 		if stopping.Load() {
 			return false
 		}

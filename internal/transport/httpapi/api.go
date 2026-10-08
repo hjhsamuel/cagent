@@ -40,6 +40,11 @@ type Claims struct {
 
 // New 构造 Gin 路由。ready 必须检查当前依赖可用性；服务关闭时由装配层返回 false。
 func New(service app.Service, events Events, cfg config.HTTP, agentName string, ready func(context.Context) bool, taskInputs ...TaskInputs) (http.Handler, error) {
+	return NewWithKeyRotation(service, events, cfg, agentName, nil, ready, taskInputs...)
+}
+
+// NewWithKeyRotation 在现有 HTTP 服务提供运维密钥轮换。
+func NewWithKeyRotation(service app.Service, events Events, cfg config.HTTP, agentName string, rotate func(context.Context) (string, error), ready func(context.Context) bool, taskInputs ...TaskInputs) (http.Handler, error) {
 	if err := cfg.ValidateServer(); err != nil {
 		return nil, err
 	}
@@ -92,6 +97,16 @@ func New(service app.Service, events Events, cfg config.HTTP, agentName string, 
 			c.Next()
 		})
 		admin.GET("/metrics", gin.WrapH(observability.Default))
+		if rotate != nil {
+			admin.POST("/model-keys/rotate", func(c *gin.Context) {
+				version, err := rotate(c.Request.Context())
+				if err != nil {
+					failure(c, 500, "model_key_rotation_failed")
+					return
+				}
+				c.JSON(200, gin.H{"version": version})
+			})
+		}
 		admin.GET("/traces", func(c *gin.Context) { c.JSON(200, observability.Default.Spans()) })
 	}
 	api := r.Group("/api/v1", func(c *gin.Context) {

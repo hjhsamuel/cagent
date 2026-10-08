@@ -10,14 +10,15 @@ import (
 // 未设置保留默认值；显式空值参与覆盖并按规则报错，不静默回退。
 // 不自动加载 .env、不展开变量引用、不裁剪字符串；装配层负责调用及处理错误。
 // 应在启动时调用，运行期间不要一边修改进程环境一边加载配置。
-func Load() (Config, error) { return LoadFromEnv(os.LookupEnv) }
+func Load() (Config, error) { return LoadFromEnv(os.LookupEnv, os.Environ()...) }
 
 // LoadFromEnv 与 Load 使用相同流程，但由调用方提供环境查找函数。
 // 它支持不修改全局环境的确定性测试；函数应在本次调用中返回稳定的快照。
-// 只读取已知键，不枚举或拒绝宿主环境中的其他变量。每个已知键至多读取一次。
+// names 提供版本密钥的环境名称或 name=value 项；其他配置只读取已知键。
+// 每个已知键至多读取一次，不拒绝宿主环境中的其他变量。
 // 解析失败或校验失败均返回零值 Config，防止调用方误用部分配置。
 // nil 查找函数返回参数错误；本函数不捕获调用方函数的 panic。
-func LoadFromEnv(lookup func(string) (string, bool)) (Config, error) {
+func LoadFromEnv(lookup func(string) (string, bool), names ...string) (Config, error) {
 	if lookup == nil {
 		return Config{}, invalid("environment", "environment lookup is required")
 	}
@@ -27,6 +28,10 @@ func LoadFromEnv(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, err
 	}
 	c.Logging = logging
+	c.ModelEncryption, err = LoadModelEncryptionFromEnv(lookup, names)
+	if err != nil {
+		return Config{}, err
+	}
 	// 显式绑定避免反射和隐式命名规则，新增配置时必须同时决定其环境变量名称。
 	for _, item := range []struct {
 		key string
@@ -39,8 +44,6 @@ func LoadFromEnv(lookup func(string) (string, bool)) (Config, error) {
 		{"CAGENT_MONGODB_URI", &c.MongoDB.URI},
 		{"CAGENT_MONGODB_DATABASE", &c.MongoDB.Database},
 		{"CAGENT_AGENT_NAME", &c.Agent.Name},
-		{"CAGENT_MODEL_ENCRYPTION_KEYS", &c.ModelEncryption.KeysJSON},
-		{"CAGENT_MODEL_ENCRYPTION_ACTIVE_VERSION", &c.ModelEncryption.ActiveVersion},
 		{"CAGENT_CONTEXT_POLICY_VERSION", &c.Context.PolicyVersion},
 	} {
 		if value, present := lookup(item.key); present {

@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"github.com/hjhsamuel/cagent/internal/config"
+	"reflect"
 	"strconv"
 	"testing"
 )
@@ -47,7 +48,7 @@ func TestLoggingConfiguration(t *testing.T) {
 			values[tc.key] = tc.value
 			c, err := load(values)
 			assertInvalid(t, err, tc.field)
-			if c != (config.Config{}) {
+			if !reflect.DeepEqual(c, config.Config{}) {
 				t.Fatal("partial configuration returned")
 			}
 		})

@@ -7,36 +7,84 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
+	"strconv"
 	"strings"
 
 	"github.com/hjhsamuel/cagent/internal/storage/schema"
 )
 
-// ModelEncryption 的 keyring 为 JSON {版本: base64(AES密钥)}，禁止整体打印。
+// ModelEncryption 保存各版本的 Base64 AES 密钥，禁止整体打印。
 type ModelEncryption struct {
-	KeysJSON      string
-	ActiveVersion string
+	Keys map[string]string
+}
+
+const modelEncryptionKeyPrefix = "CAGENT_MODEL_ENCRYPTION_KEY_V"
+
+// LoadModelEncryptionFromEnv 根据环境名称列表读取独立版本密钥。
+// names 可包含 os.Environ 返回的 name=value 项；值只通过 lookup 读取。
+func LoadModelEncryptionFromEnv(lookup func(string) (string, bool), names []string) (ModelEncryption, error) {
+	if lookup == nil {
+		return ModelEncryption{}, invalid("environment", "environment lookup is required")
+	}
+	c := ModelEncryption{}
+	seen := make(map[string]bool)
+	for _, entry := range names {
+		name, _, _ := strings.Cut(entry, "=")
+		if !strings.HasPrefix(name, modelEncryptionKeyPrefix) || seen[name] {
+			continue
+		}
+		seen[name] = true
+		suffix := strings.TrimPrefix(name, modelEncryptionKeyPrefix)
+		if value, present := lookup(name); present {
+			if c.Keys == nil {
+				c.Keys = make(map[string]string)
+			}
+			c.Keys["v"+suffix] = value
+		}
+	}
+	return c, nil
+}
+
+func encryptionVersion(version string) (uint64, error) {
+	n, err := strconv.ParseUint(strings.TrimPrefix(version, "v"), 10, 64)
+	if err != nil || n == 0 || version != "v"+strconv.FormatUint(n, 10) {
+		return 0, invalid("model_encryption.keys", "version must be v followed by a positive decimal integer without leading zeros")
+	}
+	return n, nil
 }
 
 // Keyring 不暴露密钥材料。版本作为附加认证数据，禁止篡改版本后解密。
 type Keyring struct {
-	keys   map[string]cipher.AEAD
-	active string
+	keys     map[string]cipher.AEAD
+	active   string
+	deferred *ModelEncryption
+}
+
+// NewDeferredKeyring 只复制配置；在加解密时验证密钥。
+func NewDeferredKeyring(c ModelEncryption) *Keyring {
+	copy := ModelEncryption{Keys: make(map[string]string)}
+	for version, value := range c.Keys {
+		copy.Keys[version] = value
+	}
+	return &Keyring{deferred: &copy}
 }
 
 func NewKeyring(c ModelEncryption) (*Keyring, error) {
-	var encoded map[string]string
-	if json.Unmarshal([]byte(c.KeysJSON), &encoded) != nil || len(encoded) == 0 {
-		return nil, invalid("model_encryption.keys", "must be a nonempty JSON object of versioned base64 AES keys")
+	if len(c.Keys) == 0 {
+		return nil, invalid("model_encryption.keys", "at least one versioned base64 AES key is required")
 	}
-	k := &Keyring{keys: make(map[string]cipher.AEAD), active: c.ActiveVersion}
-	for version, value := range encoded {
-		if strings.TrimSpace(version) == "" {
-			return nil, invalid("model_encryption.keys", "version must not be blank")
+	k := &Keyring{keys: make(map[string]cipher.AEAD)}
+	var newest uint64
+	for version, value := range c.Keys {
+		n, err := encryptionVersion(version)
+		if err != nil {
+			return nil, err
+		}
+		if n > newest {
+			newest, k.active = n, version
 		}
 		key, err := base64.StdEncoding.DecodeString(value)
 		if err != nil || (len(key) != 16 && len(key) != 24 && len(key) != 32) {
@@ -52,13 +100,17 @@ func NewKeyring(c ModelEncryption) (*Keyring, error) {
 		}
 		k.keys[version] = aead
 	}
-	if k.keys[k.active] == nil {
-		return nil, invalid("model_encryption.active_version", "must identify a configured key version")
-	}
 	return k, nil
 }
 
 func (k *Keyring) Encrypt(plaintext string, weight int64) (schema.EncryptedKey, error) {
+	if k != nil && k.deferred != nil {
+		ring, err := NewKeyring(*k.deferred)
+		if err != nil {
+			return schema.EncryptedKey{}, err
+		}
+		return ring.Encrypt(plaintext, weight)
+	}
 	if k == nil || k.keys[k.active] == nil || strings.TrimSpace(plaintext) == "" || weight < 0 {
 		return schema.EncryptedKey{}, invalid("model.api_keys", "invalid encryption input")
 	}
@@ -83,6 +135,13 @@ func StoredKeyID(key schema.EncryptedKey) string {
 }
 
 func (k *Keyring) Decrypt(key schema.EncryptedKey) (string, error) {
+	if k != nil && k.deferred != nil {
+		ring, err := NewKeyring(ModelEncryption{Keys: map[string]string{key.Version: k.deferred.Keys[key.Version]}})
+		if err != nil {
+			return "", err
+		}
+		return ring.Decrypt(key)
+	}
 	if k == nil || k.keys[key.Version] == nil {
 		return "", invalid("model.api_keys", "unknown encryption key version")
 	}
@@ -116,7 +175,13 @@ type KeyPool struct {
 
 func NewKeyPool(keys []schema.EncryptedKey, ring *Keyring) (*KeyPool, error) {
 	p := &KeyPool{}
+	seen := make(map[string]bool)
 	for _, key := range keys {
+		id := StoredKeyID(key)
+		if strings.TrimSpace(id) == "" || seen[id] {
+			return nil, invalid("model.api_keys.id", "key ids must be nonblank and unique within a model")
+		}
+		seen[id] = true
 		if key.Weight < 0 || key.Weight > math.MaxInt64-p.total {
 			return nil, invalid("model.api_keys.weight", "invalid or overflowing weight")
 		}

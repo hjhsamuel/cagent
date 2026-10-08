@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"github.com/hjhsamuel/cagent/internal/config"
+	"reflect"
 	"testing"
 )
 
@@ -30,7 +31,7 @@ func TestCompressionConfiguration(t *testing.T) {
 		v["CAGENT_CONTEXT_"+tt.key] = tt.value
 		got, err := load(v)
 		assertInvalid(t, err, "context."+tt.field)
-		if got != (config.Config{}) {
+		if !reflect.DeepEqual(got, config.Config{}) {
 			t.Fatal("partial config")
 		}
 		v["CAGENT_CONTEXT_"+tt.key] = old

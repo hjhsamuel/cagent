@@ -47,6 +47,20 @@ func (t Thinking) Validate() error {
 
 // ResolveModel 将集中维护的 MongoDB 文档转换为已校验、已解密的运行时配置。
 func ResolveModel(d schema.Model, name string, ring *Keyring) (Agent, error) {
+	a, err := ResolveModelMetadata(d, name)
+	if err != nil {
+		return Agent{}, err
+	}
+	a.APIKey = ""
+	a.Keys, err = NewKeyPool(d.APIKeys, ring)
+	if err != nil {
+		return Agent{}, err
+	}
+	return a, nil
+}
+
+// ResolveModelMetadata 校验模型参数，不读取或校验凭据。
+func ResolveModelMetadata(d schema.Model, name string) (Agent, error) {
 	if strings.TrimSpace(d.ID) == "" || strings.TrimSpace(d.Provider) == "" {
 		return Agent{}, invalid("model", "model id and provider must not be blank")
 	}
@@ -59,11 +73,6 @@ func ResolveModel(d schema.Model, name string, ring *Keyring) (Agent, error) {
 	}
 	a := Agent{Name: name, Provider: d.Provider, Model: d.Model, BaseURL: d.BaseURL, TokenEncoding: d.Options.TokenEncoding, MaxTokensField: d.Options.MaxTokensField, RequestTimeout: timeout, Thinking: &Thinking{Enabled: d.Options.Thinking.Enabled, Key: d.Options.Thinking.Key, Value: d.Options.Thinking.Value}, APIKey: "validation-only"}
 	if err := a.ValidateOpenAI(); err != nil {
-		return Agent{}, err
-	}
-	a.APIKey = ""
-	a.Keys, err = NewKeyPool(d.APIKeys, ring)
-	if err != nil {
 		return Agent{}, err
 	}
 	return a, nil

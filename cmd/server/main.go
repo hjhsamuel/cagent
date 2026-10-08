@@ -12,6 +12,7 @@ import (
 	"github.com/hjhsamuel/cagent/internal/bootstrap"
 	"github.com/hjhsamuel/cagent/internal/config"
 	"github.com/hjhsamuel/cagent/internal/observability"
+	_ "github.com/joho/godotenv/autoload" // 启动时加载工作目录的 .env，已有环境变量优先。
 	"github.com/sirupsen/logrus"
 )
 
@@ -20,12 +21,9 @@ func main() { os.Exit(run(os.LookupEnv)) }
 // run 先校验完整配置，再初始化日志和业务依赖。使用返回码而非 Fatal，保证
 // defer 能释放应用、数据库与日志；SIGINT/SIGTERM 触发优雅关闭。
 func run(lookup func(string) (string, bool)) int {
-	cfg, err := config.LoadFromEnv(lookup)
+	cfg, err := config.LoadFromEnv(lookup, os.Environ()...)
 	if err == nil {
 		err = cfg.HTTP.ValidateServer()
-	}
-	if err == nil {
-		_, err = config.NewKeyring(cfg.ModelEncryption)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "process.start_failed:", err)

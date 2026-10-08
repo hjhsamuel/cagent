@@ -13,8 +13,7 @@ func TestModelEnvironmentDoesNotSelectDefaultModel(t *testing.T) {
 	for _, key := range []string{"CAGENT_AGENT_MODEL", "CAGENT_AGENT_PROVIDER", "CAGENT_AGENT_BASE_URL", "CAGENT_AGENT_API_KEY", "CAGENT_AGENT_TOKEN_ENCODING", "CAGENT_AGENT_MAX_TOKENS_FIELD", "CAGENT_AGENT_REQUEST_TIMEOUT"} {
 		v[key] = "obsolete-secret-value"
 	}
-	v["CAGENT_MODEL_ENCRYPTION_KEYS"] = `{"v1":"environment-only-secret"}`
-	v["CAGENT_MODEL_ENCRYPTION_ACTIVE_VERSION"] = "v1"
+	v["CAGENT_MODEL_ENCRYPTION_KEY_V1"] = "environment-only-secret"
 	c, err := load(v)
 	if err != nil {
 		t.Fatal(err)
@@ -22,7 +21,7 @@ func TestModelEnvironmentDoesNotSelectDefaultModel(t *testing.T) {
 	if c.Agent.Model != "" || c.Agent.Provider != "" || c.Agent.BaseURL != "" || c.Agent.APIKey != "" || c.Agent.TokenEncoding != "" || c.Agent.MaxTokensField != "max_tokens" || c.Agent.RequestTimeout != 2*time.Minute {
 		t.Fatal("obsolete model environment settings were loaded")
 	}
-	if c.ModelEncryption.KeysJSON != v["CAGENT_MODEL_ENCRYPTION_KEYS"] || c.ModelEncryption.ActiveVersion != "v1" {
+	if c.ModelEncryption.Keys["v1"] != v["CAGENT_MODEL_ENCRYPTION_KEY_V1"] {
 		t.Fatal("keyring environment not loaded")
 	}
 	if strings.Contains(fmt.Sprintf("%+v", c.ModelEncryption), "environment-only-secret") {

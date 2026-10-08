@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"reflect"
 
 	"testing"
 
@@ -24,7 +25,7 @@ func modelFixture(t *testing.T) (config.Config, *config.Keyring, fakeModels) {
 	c := config.Defaults()
 	c.MongoDB.URI = "mongodb://localhost:27017"
 
-	ring, err := config.NewKeyring(config.ModelEncryption{KeysJSON: `{"v1":"MDEyMzQ1Njc4OWFiY2RlZg=="}`, ActiveVersion: "v1"})
+	ring, err := config.NewKeyring(config.ModelEncryption{Keys: map[string]string{"v1": "MDEyMzQ1Njc4OWFiY2RlZg=="}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +58,7 @@ func TestMongoModelCatalogHasNoDefault(t *testing.T) {
 }
 
 func TestMongoModelCatalogFailsClosed(t *testing.T) {
-	for _, mode := range []string{"empty", "bad_ciphertext", "missing_nonce", "unknown_version", "budget", "timeout", "thinking"} {
+	for _, mode := range []string{"empty", "budget", "timeout", "thinking"} {
 		t.Run(mode, func(t *testing.T) {
 			c, ring, docs := modelFixture(t)
 			d := docs["main"]
@@ -81,7 +82,7 @@ func TestMongoModelCatalogFailsClosed(t *testing.T) {
 				docs["main"] = d
 			}
 			loaded, err := loadModels(context.Background(), docs, c, ring)
-			if err == nil || loaded != (config.Config{}) {
+			if err == nil || !reflect.DeepEqual(loaded, config.Config{}) {
 				t.Fatal("invalid directory returned partial config")
 			}
 		})

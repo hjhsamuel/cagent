@@ -29,7 +29,7 @@ func TestProductionBootstrapStartStopAndOccupiedPort(t *testing.T) {
 	cfg.HTTP = settings()
 	cfg.HTTP.Address = address
 	cfg.MongoDB = config.MongoDB{URI: dbCfg.URI, Database: dbCfg.Database}
-	cfg.ModelEncryption = config.ModelEncryption{KeysJSON: `{"v1":"MDEyMzQ1Njc4OWFiY2RlZg=="}`, ActiveVersion: "v1"}
+	cfg.ModelEncryption = config.ModelEncryption{Keys: map[string]string{"v1": "MDEyMzQ1Njc4OWFiY2RlZg=="}}
 	ring, err := config.NewKeyring(cfg.ModelEncryption)
 	if err != nil {
 		t.Fatal(err)

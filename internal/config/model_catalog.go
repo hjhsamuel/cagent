@@ -5,14 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
-	"strings"
+	"sync"
 
 	"github.com/hjhsamuel/cagent/internal/apperrors"
 	"github.com/hjhsamuel/cagent/internal/storage/schema"
 )
 
-// ModelCatalog 为启动时校验的只读 MongoDB 模型目录，无默认模型。
+// ModelCatalog 校验模型参数，使用时校验凭据，并支持并发读取和串行轮换。
 type ModelCatalog struct {
+	mu        sync.RWMutex
 	documents []schema.Model
 	byID      map[string]schema.Model
 	ring      *Keyring
@@ -44,16 +45,8 @@ func NewModelCatalog(docs []schema.Model, name string, ring *Keyring) (*ModelCat
 		if _, exists := c.byID[copy.ID]; exists {
 			return nil, invalid("models", "duplicate model id")
 		}
-		if _, err := ResolveModel(copy, name, ring); err != nil {
+		if _, err := ResolveModelMetadata(copy, name); err != nil {
 			return nil, err
-		}
-		seen := map[string]bool{}
-		for _, key := range copy.APIKeys {
-			id := StoredKeyID(key)
-			if strings.TrimSpace(id) == "" || seen[id] {
-				return nil, invalid("model.api_keys.id", "key ids must be nonblank and unique within a model")
-			}
-			seen[id] = true
 		}
 		c.documents = append(c.documents, copy)
 		c.byID[copy.ID] = copy
@@ -63,6 +56,10 @@ func NewModelCatalog(docs []schema.Model, name string, ring *Keyring) (*ModelCat
 
 // Select 未指定模型时均匀抽取模型，再按该模型的 key 权重随机抽取凭据。
 func (c *ModelCatalog) Select(modelID string) (SelectedModel, error) {
+	if c != nil {
+		c.mu.RLock()
+		defer c.mu.RUnlock()
+	}
 	if c == nil || len(c.documents) == 0 {
 		return SelectedModel{}, invalid("models", "model catalog is unavailable")
 	}
@@ -88,7 +85,7 @@ func (c *ModelCatalog) Select(modelID string) (SelectedModel, error) {
 	v := n.Int64()
 	for _, key := range a.Keys.keys {
 		if v < key.weight {
-			return c.Bind(modelID, key.id)
+			return c.bind(modelID, key.id)
 		}
 		v -= key.weight
 	}
@@ -97,6 +94,14 @@ func (c *ModelCatalog) Select(modelID string) (SelectedModel, error) {
 
 // Bind 精确解析持久引用；不会在模型或凭据缺失时重新随机选择。
 func (c *ModelCatalog) Bind(modelID, keyID string) (SelectedModel, error) {
+	if c != nil {
+		c.mu.RLock()
+		defer c.mu.RUnlock()
+	}
+	return c.bind(modelID, keyID)
+}
+
+func (c *ModelCatalog) bind(modelID, keyID string) (SelectedModel, error) {
 	if c == nil {
 		return SelectedModel{}, invalid("models", "model catalog is unavailable")
 	}

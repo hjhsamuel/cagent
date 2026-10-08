@@ -24,7 +24,7 @@ import (
 
 func sessionCatalog(t *testing.T, url string) *config.ModelCatalog {
 	t.Helper()
-	ring, err := config.NewKeyring(config.ModelEncryption{KeysJSON: `{"v1":"MDEyMzQ1Njc4OWFiY2RlZg=="}`, ActiveVersion: "v1"})
+	ring, err := config.NewKeyring(config.ModelEncryption{Keys: map[string]string{"v1": "MDEyMzQ1Njc4OWFiY2RlZg=="}})
 	if err != nil {
 		t.Fatal(err)
 	}

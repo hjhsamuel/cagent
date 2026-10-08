@@ -23,7 +23,7 @@ func loadModels(ctx context.Context, db modelReader, cfg config.Config, ring *co
 	}
 	for _, doc := range docs {
 		check := cfg
-		check.Agent, err = config.ResolveModel(doc, cfg.Agent.Name, ring)
+		check.Agent, err = config.ResolveModelMetadata(doc, cfg.Agent.Name)
 		if err != nil {
 			return config.Config{}, err
 		}
