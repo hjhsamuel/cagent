@@ -27,6 +27,9 @@ go.work.sum
 # env file
 .env
 
+# Local integration-test servers and data (never committed)
+.local/
+
 # Editor/IDE
 # .idea/
 # .vscode/
