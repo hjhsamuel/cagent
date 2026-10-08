@@ -11,6 +11,7 @@ import (
 
 	"github.com/hjhsamuel/cagent/internal/apperrors"
 	"github.com/hjhsamuel/cagent/internal/domain"
+	"github.com/hjhsamuel/cagent/internal/storage/schema"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -89,11 +90,7 @@ func connect(ctx context.Context, cfg Options) (*Database, error) {
 	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 	if err = client.Ping(ctx, readpref.Primary()); err == nil {
-		var hello struct {
-			SetName  string `bson:"setName"`
-			Msg      string `bson:"msg"`
-			Sessions *int64 `bson:"logicalSessionTimeoutMinutes"`
-		}
+		var hello schema.Hello
 		err = client.Database("admin").RunCommand(ctx, bson.D{{Key: "hello", Value: 1}}).Decode(&hello)
 		if err == nil && (hello.Sessions == nil || (hello.SetName == "" && hello.Msg != "isdbgrid")) {
 			err = apperrors.New(apperrors.ErrUnsupported, "mongodb.topology", "transactions require a replica set or mongos")
@@ -197,9 +194,7 @@ func (b *Database) now(ctx context.Context) (time.Time, error) {
 		}
 		return time.Time{}, invariant()
 	}
-	var row struct {
-		Now time.Time `bson:"now"`
-	}
+	var row schema.ClockTime
 	err = cur.Decode(&row)
 	return row.Now, err
 }

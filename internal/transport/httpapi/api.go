@@ -115,7 +115,27 @@ func New(service app.Service, events Events, cfg config.HTTP, agentName string, 
 		c.Next()
 	})
 	api.POST("/sessions", func(c *gin.Context) {
-		s, err := service.CreateSession(c.Request.Context(), scopeOf(c), agentName)
+		var body struct {
+			ModelID string `json:"model_id"`
+		}
+		decoder := json.NewDecoder(c.Request.Body)
+		err := decoder.Decode(&body)
+		if err != nil && err != io.EOF {
+			respondSessionInputError(c, err)
+			return
+		}
+		if err == nil {
+			var extra any
+			if err := decoder.Decode(&extra); err != io.EOF {
+				respondSessionInputError(c, err)
+				return
+			}
+		}
+		if body.ModelID != "" && strings.TrimSpace(body.ModelID) == "" {
+			failure(c, 400, "invalid_argument")
+			return
+		}
+		s, err := service.CreateSessionWithModel(c.Request.Context(), scopeOf(c), agentName, body.ModelID)
 		if err != nil {
 			respondError(c, err)
 			return
@@ -292,11 +312,21 @@ func sessionDTO(s domain.Session) any {
 	return struct {
 		ID          string    `json:"id"`
 		AgentID     string    `json:"agent_id"`
+		ModelID     string    `json:"model_id,omitempty"`
 		ActiveRunID string    `json:"active_run_id,omitempty"`
 		Version     int64     `json:"version"`
 		CreatedAt   time.Time `json:"created_at"`
 		UpdatedAt   time.Time `json:"updated_at"`
-	}{s.ID, s.AgentID, s.ActiveRunID, s.Version, s.CreatedAt, s.UpdatedAt}
+	}{s.ID, s.AgentID, s.ModelID, s.ActiveRunID, s.Version, s.CreatedAt, s.UpdatedAt}
+}
+
+func respondSessionInputError(c *gin.Context, err error) {
+	var large *http.MaxBytesError
+	if errors.As(err, &large) {
+		failure(c, 413, "body_too_large")
+	} else {
+		failure(c, 400, "invalid_argument")
+	}
 }
 func runDTO(r domain.Run) any {
 	return struct {

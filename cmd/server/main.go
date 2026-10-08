@@ -24,6 +24,9 @@ func run(lookup func(string) (string, bool)) int {
 	if err == nil {
 		err = cfg.HTTP.ValidateServer()
 	}
+	if err == nil {
+		_, err = config.NewKeyring(cfg.ModelEncryption)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "process.start_failed:", err)
 		return 1

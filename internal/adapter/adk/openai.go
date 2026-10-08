@@ -26,6 +26,8 @@ import (
 type OpenAIModel struct {
 	capacity         *observability.Gate
 	client           openai.Client
+	keys             *config.KeyPool
+	thinking         *config.Thinking
 	name, limitField string
 	codec            tokenizer.Codec
 	mu               sync.Mutex
@@ -35,9 +37,6 @@ type OpenAIModel struct {
 // 提交结果导致重复计费/生成；重定向被禁止，API 密钥不会被转发到不同地址。
 // HTTPClient 可注入测试 Transport，但配置的超时和重定向策略始终生效。
 func NewOpenAI(cfg config.Agent, client *http.Client) (*OpenAIModel, error) {
-	if cfg.Provider != "openai" {
-		return nil, unsupported("agent.provider")
-	}
 	if err := cfg.ValidateOpenAI(); err != nil {
 		return nil, err
 	}
@@ -52,7 +51,19 @@ func NewOpenAI(cfg config.Agent, client *http.Client) (*OpenAIModel, error) {
 	httpClient.Timeout = cfg.RequestTimeout
 	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	sdk := openai.NewClient(option.WithAPIKey(cfg.APIKey), option.WithBaseURL(strings.TrimRight(cfg.BaseURL, "/")+"/"), option.WithHTTPClient(httpClient), option.WithMaxRetries(0))
-	return &OpenAIModel{capacity: observability.NewGate(config.Defaults().Capacity.Models, "model"), client: sdk, name: cfg.Model, limitField: cfg.MaxTokensField, codec: codec}, nil
+	var thinking *config.Thinking
+	if cfg.Thinking != nil && cfg.Thinking.Enabled {
+		// 深拷贝，避免调用方修改共享 JSON 参数影响并发请求。
+		data, err := json.Marshal(cfg.Thinking)
+		if err != nil {
+			return nil, invalid("model.thinking")
+		}
+		thinking = &config.Thinking{}
+		if err := json.Unmarshal(data, thinking); err != nil {
+			return nil, invalid("model.thinking")
+		}
+	}
+	return &OpenAIModel{capacity: observability.NewGate(config.Defaults().Capacity.Models, "model"), client: sdk, keys: cfg.Keys, thinking: thinking, name: cfg.Model, limitField: cfg.MaxTokensField, codec: codec}, nil
 }
 
 // SetCapacity 仅允许启动装配时调用；主模型与摘要模型共享同一闸门。
@@ -222,8 +233,20 @@ func (m *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 		} else {
 			params.MaxCompletionTokens = openai.Int(int64(req.Config.MaxOutputTokens))
 		}
+		var requestOptions []option.RequestOption
+		if m.keys != nil {
+			key, err := m.keys.Pick()
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			requestOptions = append(requestOptions, option.WithAPIKey(key))
+		}
+		if m.thinking != nil {
+			requestOptions = append(requestOptions, option.WithJSONSet(m.thinking.Key, m.thinking.Value))
+		}
 		if !stream {
-			resp, e := m.client.Chat.Completions.New(ctx, params)
+			resp, e := m.client.Chat.Completions.New(ctx, params, requestOptions...)
 			if e != nil {
 				yield(nil, safeError(e))
 				return
@@ -268,7 +291,7 @@ func (m *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 			return
 		}
 		params.StreamOptions = openai.ChatCompletionStreamOptionsParam{IncludeUsage: openai.Bool(true)}
-		s := m.client.Chat.Completions.NewStreaming(ctx, params)
+		s := m.client.Chat.Completions.NewStreaming(ctx, params, requestOptions...)
 		defer s.Close()
 		var answer strings.Builder
 		stopped := false

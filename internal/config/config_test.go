@@ -16,9 +16,7 @@ import (
 // requiredEnv 使用虚构模型配置，测试只验证配置行为，不声称提供方真实可用。
 func requiredEnv() map[string]string {
 	return map[string]string{
-		"CAGENT_MONGODB_URI":    "mongodb://localhost:27017",
-		"CAGENT_AGENT_PROVIDER": "test-provider",
-		"CAGENT_AGENT_MODEL":    "test-model",
+		"CAGENT_MONGODB_URI": "mongodb://localhost:27017",
 	}
 }
 
@@ -63,7 +61,7 @@ func TestDefaultsAndRequiredDeploymentSettings(t *testing.T) {
 	assertInvalid(t, want.Validate(), "mongodb.uri")
 	got := validConfig(t)
 	want.MongoDB.URI = "mongodb://localhost:27017"
-	want.Agent.Provider, want.Agent.Model = "test-provider", "test-model"
+
 	if got != want {
 		t.Fatal("unset environment did not retain defaults")
 	}
@@ -73,7 +71,7 @@ func TestDefaultsAndRequiredDeploymentSettings(t *testing.T) {
 		t.Fatal("configuration leaked across loads")
 	}
 	for key, field := range map[string]string{
-		"CAGENT_MONGODB_URI": "mongodb.uri", "CAGENT_AGENT_PROVIDER": "agent.provider", "CAGENT_AGENT_MODEL": "agent.model",
+		"CAGENT_MONGODB_URI": "mongodb.uri",
 	} {
 		values := requiredEnv()
 		delete(values, key)
@@ -97,8 +95,6 @@ func TestEveryEnvironmentOverride(t *testing.T) {
 		"CAGENT_MONGODB_URI":               "mongodb://example.invalid:27017/?replicaSet=example",
 		"CAGENT_MONGODB_DATABASE":          "custom",
 		"CAGENT_AGENT_NAME":                "assistant",
-		"CAGENT_AGENT_PROVIDER":            "custom-provider",
-		"CAGENT_AGENT_MODEL":               "custom-model",
 		"CAGENT_TASKS_POLL_INTERVAL":       "3s",
 		"CAGENT_TASKS_OBSERVATION_TIMEOUT": "45s",
 		"CAGENT_TASKS_RECONNECT_BACKOFF":   "1.5s",
@@ -118,7 +114,7 @@ func TestEveryEnvironmentOverride(t *testing.T) {
 		Logging:  config.Logging{Level: "debug", Path: "logs/custom.log", Size: 10, Rolls: 0},
 		HTTP:     config.HTTP{MaxSubscriptions: 256, Address: "[::1]:9090", SSEHeartbeat: 750 * time.Millisecond, ShutdownGrace: 90 * time.Second, WriteTimeout: 10 * time.Second, MaxBodyBytes: 1 << 20},
 		MongoDB:  config.MongoDB{URI: values["CAGENT_MONGODB_URI"], Database: "custom"},
-		Agent:    config.Agent{Name: "assistant", Provider: "custom-provider", Model: "custom-model", MaxTokensField: "max_tokens", RequestTimeout: 2 * time.Minute},
+		Agent:    config.Agent{Name: "assistant", MaxTokensField: "max_tokens", RequestTimeout: 2 * time.Minute},
 		Tasks:    config.Tasks{PollInterval: 3 * time.Second, ObservationTimeout: 45 * time.Second, ReconnectBackoff: 1500 * time.Millisecond},
 		Context:  config.Context{WindowTokens: 32000, OutputTokens: 4000, ToolTokens: 2000, SafetyTokens: 500, PolicyVersion: "v2", CompressionThresholdPercent: 80, KeepRecentRounds: 2, SummaryWindowTokens: 8192, SummaryOutputTokens: 512},
 	}
@@ -136,7 +132,7 @@ func TestExplicitBlankStringsAreNotDefaulted(t *testing.T) {
 	for key, field := range map[string]string{
 		"CAGENT_HTTP_ADDRESS": "http.address", "CAGENT_MONGODB_URI": "mongodb.uri",
 		"CAGENT_MONGODB_DATABASE": "mongodb.database", "CAGENT_AGENT_NAME": "agent.name",
-		"CAGENT_AGENT_PROVIDER": "agent.provider", "CAGENT_AGENT_MODEL": "agent.model",
+
 		"CAGENT_CONTEXT_POLICY_VERSION": "context.policy_version",
 	} {
 		for _, blank := range []string{"", " \t\u3000"} {
@@ -285,7 +281,7 @@ func TestLoadReadsProcessEnvironment(t *testing.T) {
 		"CAGENT_LOG_LEVEL": "info", "CAGENT_LOG_PATH": "logs/test.log", "CAGENT_LOG_SIZE": "1", "CAGENT_LOG_ROLL": "2",
 		"CAGENT_HTTP_WRITE_TIMEOUT": "10s", "CAGENT_HTTP_MAX_BODY_BYTES": "1048576", "CAGENT_HTTP_ADDRESS": ":9191", "CAGENT_HTTP_SSE_HEARTBEAT": "10s", "CAGENT_HTTP_SHUTDOWN_GRACE": "20s",
 		"CAGENT_MONGODB_URI": "mongodb://localhost:27017", "CAGENT_MONGODB_DATABASE": "test",
-		"CAGENT_AGENT_REQUEST_TIMEOUT": "2m", "CAGENT_AGENT_NAME": "test", "CAGENT_AGENT_PROVIDER": "test", "CAGENT_AGENT_MODEL": "test",
+		"CAGENT_AGENT_REQUEST_TIMEOUT": "2m", "CAGENT_AGENT_NAME": "test", "CAGENT_AGENT_PROVIDER": "test",
 		"CAGENT_TASKS_POLL_INTERVAL": "1s", "CAGENT_TASKS_OBSERVATION_TIMEOUT": "5s", "CAGENT_TASKS_RECONNECT_BACKOFF": "2s",
 		"CAGENT_CONTEXT_WINDOW_TOKENS": "100", "CAGENT_CONTEXT_OUTPUT_TOKENS": "10", "CAGENT_CONTEXT_TOOL_TOKENS": "0",
 		"CAGENT_CONTEXT_SAFETY_TOKENS": "1", "CAGENT_CONTEXT_POLICY_VERSION": "test",

@@ -2,48 +2,34 @@ package mongodb
 
 import (
 	"math"
-	"time"
 
 	"github.com/hjhsamuel/cagent/internal/domain"
+	"github.com/hjhsamuel/cagent/internal/storage/schema"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// document 是适配层唯一的持久化信封。查询/索引字段显式映射，领域结构不带标签。
-// Data 是 schema=1 的 BSON 子文档（Go 字段名的小写名称），仅供本适配器解码；
-// 不直接暴露给 HTTP。保留 nil/空切片区别，不使用 omitempty 编码业务载荷。
-// 未来修改领域字段编码需升级 Schema 并迁移，禁止悄悄改变既有持久格式。
-type document struct {
-	Tenant         string   `bson:"tenant_id"`
-	User           string   `bson:"user_id"`
-	ID             string   `bson:"id"`
-	Schema         int      `bson:"schema"`
-	Data           bson.Raw `bson:"data"`
-	Version        int64    `bson:"version"`
-	SessionID      string   `bson:"session_id,omitempty"`
-	RunID          string   `bson:"run_id,omitempty"`
-	InvocationID   string   `bson:"invocation_id,omitempty"`
-	CallID         string   `bson:"call_id,omitempty"`
-	Protocol       string   `bson:"protocol,omitempty"`
-	ConnectionID   string   `bson:"connection_id,omitempty"`
-	RemoteID       string   `bson:"remote_id,omitempty"`
-	Status         string   `bson:"status,omitempty"`
-	IdempotencyKey string   `bson:"idempotency_key,omitempty"`
-	Sequence       int64    `bson:"sequence,omitempty"`
-	LastSequence   int64    `bson:"last_sequence"`
-	PrunedThrough  int64    `bson:"pruned_through"`
-	Unsettled      int64    `bson:"unsettled"`
-	Start          bson.Raw `bson:"start,omitempty"`
-	Fingerprint    []byte   `bson:"fingerprint,omitempty"`
-}
+// document 的存储字段统一在 schema.Document 中维护；适配层仅保留转换方法。
+type document schema.Document
 
 func pack(scope domain.Scope, id string, value any, version int64) (document, error) {
 	raw, err := bson.Marshal(value)
-	return document{Tenant: scope.TenantID, User: scope.UserID, ID: id, Schema: 1, Data: raw, Version: version}, err
+	d := document{Tenant: scope.TenantID, User: scope.UserID, ID: id, Schema: schema.DocumentVersion, Data: raw, Version: version}
+	setModelBinding(&d, value)
+	return d, err
+}
+
+func setModelBinding(d *document, value any) {
+	switch v := value.(type) {
+	case domain.Session:
+		d.ModelID, d.APIKeyID = v.ModelID, v.APIKeyID
+	case domain.Checkpoint:
+		d.ModelID, d.APIKeyID = v.ModelID, v.APIKeyID
+	}
 }
 
 // decode 只负责 BSON 数据转换及格式版本校验，不执行数据库操作。
 func (d document) decode(value any) error {
-	if d.Schema != 1 {
+	if d.Schema != schema.DocumentVersion {
 		return invariant()
 	}
 	return bson.Unmarshal(d.Data, value)
@@ -59,6 +45,7 @@ func repack(old document, value any, version int64) (document, error) {
 	raw, err := bson.Marshal(value)
 	old.Data = raw
 	old.Version = version
+	setModelBinding(&old, value)
 	return old, err
 }
 func increment(value int64) (int64, error) {
@@ -68,12 +55,4 @@ func increment(value int64) (int64, error) {
 	return value + 1, nil
 }
 
-type leaseDocument struct {
-	Tenant   string    `bson:"tenant_id"`
-	User     string    `bson:"user_id"`
-	ID       string    `bson:"id"`
-	Owner    string    `bson:"owner"`
-	Fence    int64     `bson:"fence"`
-	Expires  time.Time `bson:"expires_at"`
-	Revision int64     `bson:"revision"`
-}
+type leaseDocument = schema.Lease

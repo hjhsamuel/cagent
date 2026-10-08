@@ -8,8 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hjhsamuel/cagent/internal/adapter/mongodb"
 	"github.com/hjhsamuel/cagent/internal/bootstrap"
 	"github.com/hjhsamuel/cagent/internal/config"
+	"github.com/hjhsamuel/cagent/internal/storage/schema"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 // 从生产装配入口启动真实监听、MongoDB 探针和 ADK 工厂，并验证停止后的端口释放。
@@ -25,11 +29,24 @@ func TestProductionBootstrapStartStopAndOccupiedPort(t *testing.T) {
 	cfg.HTTP = settings()
 	cfg.HTTP.Address = address
 	cfg.MongoDB = config.MongoDB{URI: dbCfg.URI, Database: dbCfg.Database}
-	cfg.Agent.Provider = "openai"
-	cfg.Agent.Model = "test-model"
-	cfg.Agent.BaseURL = "http://127.0.0.1:1/v1"
-	cfg.Agent.APIKey = "test-key"
-	cfg.Agent.TokenEncoding = "o200k_base"
+	cfg.ModelEncryption = config.ModelEncryption{KeysJSON: `{"v1":"MDEyMzQ1Njc4OWFiY2RlZg=="}`, ActiveVersion: "v1"}
+	ring, err := config.NewKeyring(cfg.ModelEncryption)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := ring.Encrypt("test-key", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provision, err := mongo.Connect(options.Client().ApplyURI(dbCfg.URI))
+	if err != nil {
+		t.Fatal("could not connect model fixture")
+	}
+	defer provision.Disconnect(context.Background())
+	doc := schema.Model{ID: "test-model", Model: "test-model", Provider: "GLM", BaseURL: "http://127.0.0.1:1/v1", APIKeys: []schema.EncryptedKey{key}, Options: schema.ModelConfig{TokenEncoding: "o200k_base", MaxTokensField: "max_tokens", RequestTimeout: "2m", WindowTokens: 8192, OutputTokens: 2048}}
+	if _, err := provision.Database(dbCfg.Database).Collection(mongodb.ModelCollection).InsertOne(context.Background(), doc); err != nil {
+		t.Fatal("could not provision model fixture")
+	}
 	parent, stop := context.WithCancel(context.Background())
 	defer stop()
 	result := make(chan error, 1)

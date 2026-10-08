@@ -26,7 +26,7 @@ func (c Config) Validate() error {
 	if c.HTTP.MaxSubscriptions < 1 || c.HTTP.MaxSubscriptions > 100000 {
 		return invalid("http.max_subscriptions", "must be between 1 and 100000")
 	}
-	if c.Agent.Provider == "openai" {
+	if c.Agent.Keys != nil || c.Agent.APIKey != "" || c.Agent.BaseURL != "" {
 		if err := c.Agent.ValidateOpenAI(); err != nil {
 			return err
 		}
@@ -41,8 +41,6 @@ func (c Config) Validate() error {
 		{"mongodb.uri", c.MongoDB.URI},
 		{"mongodb.database", c.MongoDB.Database},
 		{"agent.name", c.Agent.Name},
-		{"agent.provider", c.Agent.Provider},
-		{"agent.model", c.Agent.Model},
 		{"context.policy_version", c.Context.PolicyVersion},
 	} {
 		if strings.TrimSpace(item.value) == "" {

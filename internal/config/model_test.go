@@ -2,56 +2,57 @@ package config_test
 
 import (
 	"fmt"
+	"github.com/hjhsamuel/cagent/internal/config"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/hjhsamuel/cagent/internal/config"
 )
 
-func openAIEnv() map[string]string {
+func TestModelEnvironmentDoesNotSelectDefaultModel(t *testing.T) {
 	v := requiredEnv()
-	v["CAGENT_AGENT_PROVIDER"] = "openai"
-	v["CAGENT_AGENT_MODEL"] = "vendor/arbitrary-model"
-	v["CAGENT_AGENT_BASE_URL"] = "https://example.invalid/custom/v1"
-	v["CAGENT_AGENT_API_KEY"] = "unit-secret"
-	v["CAGENT_AGENT_TOKEN_ENCODING"] = "cl100k_base"
-	v["CAGENT_AGENT_MAX_TOKENS_FIELD"] = "max_completion_tokens"
-	v["CAGENT_AGENT_REQUEST_TIMEOUT"] = "45s"
-	return v
+	for _, key := range []string{"CAGENT_AGENT_MODEL", "CAGENT_AGENT_PROVIDER", "CAGENT_AGENT_BASE_URL", "CAGENT_AGENT_API_KEY", "CAGENT_AGENT_TOKEN_ENCODING", "CAGENT_AGENT_MAX_TOKENS_FIELD", "CAGENT_AGENT_REQUEST_TIMEOUT"} {
+		v[key] = "obsolete-secret-value"
+	}
+	v["CAGENT_MODEL_ENCRYPTION_KEYS"] = `{"v1":"environment-only-secret"}`
+	v["CAGENT_MODEL_ENCRYPTION_ACTIVE_VERSION"] = "v1"
+	c, err := load(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Agent.Model != "" || c.Agent.Provider != "" || c.Agent.BaseURL != "" || c.Agent.APIKey != "" || c.Agent.TokenEncoding != "" || c.Agent.MaxTokensField != "max_tokens" || c.Agent.RequestTimeout != 2*time.Minute {
+		t.Fatal("obsolete model environment settings were loaded")
+	}
+	if c.ModelEncryption.KeysJSON != v["CAGENT_MODEL_ENCRYPTION_KEYS"] || c.ModelEncryption.ActiveVersion != "v1" {
+		t.Fatal("keyring environment not loaded")
+	}
+	if strings.Contains(fmt.Sprintf("%+v", c.ModelEncryption), "environment-only-secret") {
+		t.Fatal("encryption config leaked")
+	}
 }
 
-// 动态参数逐次加载，不以固定模型名称推断 URL/密钥/编码，也不把密钥写入错误。
-func TestOpenAIDynamicConfiguration(t *testing.T) {
-	v := openAIEnv()
-	c, e := load(v)
-	if e != nil {
-		t.Fatal(e)
+func TestOpenAIProgrammaticValidation(t *testing.T) {
+	valid := config.Agent{Provider: "GLM", Model: "arbitrary-model", BaseURL: "https://example.invalid/v1", APIKey: "unit-secret", TokenEncoding: "cl100k_base", MaxTokensField: "max_tokens", RequestTimeout: time.Minute}
+	if err := valid.ValidateOpenAI(); err != nil {
+		t.Fatal(err)
 	}
-	if c.Agent.Model != v["CAGENT_AGENT_MODEL"] || c.Agent.BaseURL != v["CAGENT_AGENT_BASE_URL"] || c.Agent.APIKey != v["CAGENT_AGENT_API_KEY"] || c.Agent.TokenEncoding != "cl100k_base" || c.Agent.MaxTokensField != "max_completion_tokens" || c.Agent.RequestTimeout != 45*time.Second {
-		t.Fatal("configuration mismatch")
-	}
-	v["CAGENT_AGENT_MODEL"] = "another-model"
-	v["CAGENT_AGENT_API_KEY"] = "other-secret"
-	second, e := load(v)
-	if e != nil || second.Agent.Model == c.Agent.Model || second.Agent.APIKey == c.Agent.APIKey {
-		t.Fatal("stale configuration")
-	}
-	for _, tt := range []struct{ key, value, field string }{
-		{"CAGENT_AGENT_MODEL", "", "agent.model"}, {"CAGENT_AGENT_BASE_URL", "https://user:unit-secret@example.invalid", "agent.base_url"}, {"CAGENT_AGENT_BASE_URL", "https://example.invalid/?key=unit-secret", "agent.base_url"}, {"CAGENT_AGENT_BASE_URL", "file:///tmp/test", "agent.base_url"},
-		{"CAGENT_AGENT_API_KEY", " ", "agent.api_key"}, {"CAGENT_AGENT_TOKEN_ENCODING", "unknown", "agent.token_encoding"}, {"CAGENT_AGENT_MAX_TOKENS_FIELD", "unknown", "agent.max_tokens_field"}, {"CAGENT_AGENT_REQUEST_TIMEOUT", "0s", "agent.request_timeout"},
+	for _, tc := range []struct {
+		field  string
+		change func(*config.Agent)
+	}{
+		{"agent.model", func(a *config.Agent) { a.Model = "" }},
+		{"agent.base_url", func(a *config.Agent) { a.BaseURL = "https://user:unit-secret@example.invalid" }},
+		{"agent.base_url", func(a *config.Agent) { a.BaseURL = "https://example.invalid/?key=unit-secret" }},
+		{"agent.api_key", func(a *config.Agent) { a.APIKey = " " }},
+		{"agent.token_encoding", func(a *config.Agent) { a.TokenEncoding = "unknown" }},
+		{"agent.max_tokens_field", func(a *config.Agent) { a.MaxTokensField = "unknown" }},
+		{"agent.request_timeout", func(a *config.Agent) { a.RequestTimeout = 0 }},
 	} {
-		t.Run(tt.field+tt.value, func(t *testing.T) {
-			v := openAIEnv()
-			v[tt.key] = tt.value
-			c, e := load(v)
-			assertInvalid(t, e, tt.field)
-			if c != (config.Config{}) {
-				t.Fatal("partial config")
-			}
-			if strings.Contains(fmt.Sprintf("%+v", e), "unit-secret") {
-				t.Fatal("secret leaked")
-			}
-		})
+		a := valid
+		tc.change(&a)
+		err := a.ValidateOpenAI()
+		assertInvalid(t, err, tc.field)
+		if strings.Contains(fmt.Sprintf("%+v", err), "unit-secret") {
+			t.Fatal("secret leaked")
+		}
 	}
 }

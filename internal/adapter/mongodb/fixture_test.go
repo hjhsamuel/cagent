@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hjhsamuel/cagent/internal/storage/schema"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -94,9 +95,7 @@ func startMongo(executable string, replica bool) (string, func(), error) {
 			return "", nil, err
 		}
 		for {
-			var hello struct {
-				Primary bool `bson:"isWritablePrimary"`
-			}
+			var hello schema.Hello
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			err = client.Database("admin").RunCommand(ctx, bson.D{{Key: "hello", Value: 1}}).Decode(&hello)
 			cancel()

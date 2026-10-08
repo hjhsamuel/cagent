@@ -35,12 +35,28 @@ func mutationDigest(kind store.MutationKind, taskID string, status domain.RunSta
 		es[i].CreatedAt = time.Time{}
 		es[i].Sequence = 0
 	}
-	var checkpoint *domain.Checkpoint
+	var checkpoint any
+	format := "cagent-mutation-v1"
 	if cp != nil {
 		v := *cp
 		v.Version = 0
 		v.UpdatedAt = time.Time{}
-		checkpoint = &v
+		if v.ModelID == "" && v.APIKeyID == "" {
+			// Preserve v1 receipts for legacy checkpoints without model bindings.
+			raw, err := bson.Marshal(v)
+			if err != nil {
+				return [32]byte{}, err
+			}
+			var fields bson.D
+			if err := bson.Unmarshal(raw, &fields); err != nil {
+				return [32]byte{}, err
+			}
+			checkpoint = slices.DeleteFunc(fields, func(e bson.E) bool { return e.Key == "modelid" || e.Key == "apikeyid" })
+		} else {
+			// Binding references participate in retry identity under a new format.
+			format = "cagent-mutation-v2"
+			checkpoint = &v
+		}
 	}
 	payload := struct {
 		Format     string
@@ -49,8 +65,8 @@ func mutationDigest(kind store.MutationKind, taskID string, status domain.RunSta
 		Status     domain.RunStatus
 		Messages   []domain.Message
 		Events     []domain.Event
-		Checkpoint *domain.Checkpoint
-	}{"cagent-mutation-v1", kind, taskID, status, ms, es, checkpoint}
+		Checkpoint any
+	}{format, kind, taskID, status, ms, es, checkpoint}
 	raw, err := bson.Marshal(payload)
 	return sha256.Sum256(raw), err
 }

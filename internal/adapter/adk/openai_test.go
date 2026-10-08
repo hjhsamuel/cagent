@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hjhsamuel/cagent/internal/adapter/mongodb"
 	"github.com/hjhsamuel/cagent/internal/agent"
 	"github.com/hjhsamuel/cagent/internal/config"
 	"github.com/hjhsamuel/cagent/internal/contextengine"
@@ -207,12 +208,36 @@ func TestOpenAIRedirectAndNonStreaming(t *testing.T) {
 // 使用实际配置；失败不打印密钥、URL、提示词或模型回复，只验证非空最终输出及 usage。
 func TestRealOpenAISmoke(t *testing.T) {
 	if os.Getenv("CAGENT_TEST_MODEL") != "1" {
-		t.Skip("real model not configured: set CAGENT_TEST_MODEL=1 and CAGENT_AGENT_* settings")
+		t.Skip("real model not configured: set CAGENT_TEST_MODEL=1, MongoDB model selector and encryption keyring")
 	}
 	cfg, e := config.Load()
 	if e != nil {
 		t.Fatal(e)
 	}
+	ring, e := config.NewKeyring(cfg.ModelEncryption)
+	if e != nil {
+		t.Fatal(e)
+	}
+	db, e := mongodb.Open(context.Background(), mongodb.Options{URI: cfg.MongoDB.URI, Database: cfg.MongoDB.Database, Timeout: 10 * time.Second})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer db.Close(context.Background())
+	docs, e := db.ListModels(context.Background())
+	if e != nil {
+		t.Fatal(e)
+	}
+	catalog, e := config.NewModelCatalog(docs, cfg.Agent.Name, ring)
+	if e != nil {
+		t.Fatal(e)
+	}
+	selected, e := catalog.Select("")
+	if e != nil {
+		t.Fatal(e)
+	}
+	cfg.Agent = selected.Agent
+	cfg.Context.WindowTokens = selected.Options.WindowTokens
+	cfg.Context.OutputTokens = selected.Options.OutputTokens
 	m, e := NewOpenAI(cfg.Agent, nil)
 	if e != nil {
 		t.Fatal(e)

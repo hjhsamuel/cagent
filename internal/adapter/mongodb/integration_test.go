@@ -11,6 +11,7 @@ import (
 
 	"github.com/hjhsamuel/cagent/internal/apperrors"
 	"github.com/hjhsamuel/cagent/internal/domain"
+	"github.com/hjhsamuel/cagent/internal/storage/schema"
 	"github.com/hjhsamuel/cagent/internal/store"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -487,9 +488,7 @@ func TestMongoSnapshotsAndRecoveryScan(t *testing.T) {
 // 防止测试文件仅验证接口占位；这条查询验证真实 server 有活动副本集事务能力。
 func TestMongoRealServer(t *testing.T) {
 	db, _ := testDatabase(t)
-	var reply struct {
-		SetName string `bson:"setName"`
-	}
+	var reply schema.Hello
 	check(t, db.client.Database("admin").RunCommand(context.Background(), bson.D{{Key: "hello", Value: 1}}).Decode(&reply))
 	if reply.SetName == "" {
 		t.Fatal("integration must use a real replica set")
@@ -645,9 +644,7 @@ func TestMongoUncertainCommitAndContextCancellation(t *testing.T) {
 	db, _ := testDatabase(t)
 	ctx := context.Background()
 	_, g := startFixture(t, db)
-	var before, after struct {
-		Count int64 `bson:"count"`
-	}
+	var before, after schema.Count
 	check(t, db.client.Database("admin").RunCommand(ctx, bson.D{{Key: "configureFailPoint", Value: "failCommand"}, {Key: "mode", Value: bson.M{"times": 1}}, {Key: "data", Value: bson.M{"failCommands": bson.A{"commitTransaction"}, "appName": "cagent-storage", "writeConcernError": bson.M{"code": 64, "errmsg": "injected uncertain commit"}, "errorLabels": bson.A{"UnknownTransactionCommitResult"}}}}).Decode(&before))
 	t.Cleanup(func() {
 		_ = db.client.Database("admin").RunCommand(context.Background(), bson.D{{Key: "configureFailPoint", Value: "failCommand"}, {Key: "mode", Value: "off"}}).Err()

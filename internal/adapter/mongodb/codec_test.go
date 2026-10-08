@@ -62,6 +62,15 @@ func TestMutationDigestIsStableAndSensitiveToContent(t *testing.T) {
 	if different == first {
 		t.Fatal("message identity absent from digest")
 	}
+	cp.ModelID, cp.APIKeyID = "model", "key-1"
+	bound, err := mutationDigest(store.MutationRunCommit, "", domain.RunRunning, ms, events, &cp)
+	check(t, err)
+	cp.APIKeyID = "key-2"
+	changedKey, err := mutationDigest(store.MutationRunCommit, "", domain.RunRunning, ms, events, &cp)
+	check(t, err)
+	if bound == changedKey || bound == different {
+		t.Fatal("model/key binding absent from digest")
+	}
 	for _, pair := range [][2][]domain.Message{{nil, {}}, {{{Parts: []domain.Part{{Text: string([]byte{0xff})}}}}, {{Parts: []domain.Part{{Text: string([]byte{0xfe})}}}}}} {
 		a, err := mutationDigest(store.MutationRunCommit, "", domain.RunRunning, pair[0], nil, nil)
 		check(t, err)

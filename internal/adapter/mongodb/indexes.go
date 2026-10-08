@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/hjhsamuel/cagent/internal/apperrors"
+	"github.com/hjhsamuel/cagent/internal/storage/schema"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -12,7 +13,7 @@ import (
 // 作用域标识必须按原字节比较。拒绝已有的非 simple 默认排序规则和 view，防止
 // 大小写不敏感的集合把两个用户合并；部署账号不得在服务运行期间更改集合模式。
 func (b *Database) validateCollections(ctx context.Context) error {
-	specs, err := b.db.ListCollectionSpecifications(ctx, bson.M{"name": bson.M{"$in": []string{SessionCollection, MessageCollection, RunCollection, EventCollection, TaskCollection, SnapshotCollection, CheckpointCollection, TaskDeliveryCollection, LeaseCollection, MutationReceiptCollection, ClockCollection}}})
+	specs, err := b.db.ListCollectionSpecifications(ctx, bson.M{"name": bson.M{"$in": []string{ModelCollection, SessionCollection, MessageCollection, RunCollection, EventCollection, TaskCollection, SnapshotCollection, CheckpointCollection, TaskDeliveryCollection, LeaseCollection, MutationReceiptCollection, ClockCollection}}})
 	if err != nil {
 		return err
 	}
@@ -74,6 +75,6 @@ func (b *Database) ensureIndexes(ctx context.Context) error {
 			return safeError(err)
 		}
 	}
-	_, err := b.collection(ClockCollection).UpdateOne(ctx, bson.M{"_id": "clock"}, bson.M{"$setOnInsert": bson.M{"schema": 1}}, options.UpdateOne().SetUpsert(true))
+	_, err := b.collection(ClockCollection).UpdateOne(ctx, bson.M{"_id": "clock"}, bson.M{"$setOnInsert": schema.Clock{ID: "clock", Schema: schema.DocumentVersion}}, options.UpdateOne().SetUpsert(true))
 	return safeError(err)
 }

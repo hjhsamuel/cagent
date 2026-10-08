@@ -18,6 +18,12 @@ type Config struct {
 	Agent    Agent
 	Tasks    Tasks
 	Context  Context
+	// ModelEncryption 只保存版本化 AES 密钥的环境配置，禁止整体打印。
+	ModelEncryption ModelEncryption
+	// Models 是 MongoDB 模型目录，不包含默认模型。
+	Models *ModelCatalog
+	// SummaryAgent 在装配时从 MongoDB 加载；nil 表示沿用主模型。
+	SummaryAgent *Agent
 }
 
 // HTTP 定义服务监听与 SSE 生命周期参数，不控制后台 Run 的生命周期。
@@ -46,11 +52,14 @@ type MongoDB struct {
 	Database string
 }
 
-// Agent 保存默认 Agent 与模型客户端配置，包括敏感 APIKey，禁止整体打印。
-// Provider、Model 必须显式设置；OpenAI 兼容端另行检查地址、凭据与计数参数。
+// Agent 保存模型客户端的启动快照，禁止整体打印。
+// 环境只选择 Model 文档 ID；装配后 Model 为供应商模型名，Provider 为展示分类。
 type Agent struct {
 	Name     string
 	Provider string
+	// Keys 是解密后的只读加权密钥池，仅用于模型请求。
+	Keys     *KeyPool
+	Thinking *Thinking
 	Model    string
 	// BaseURL 为完整 API 前缀（如 https://host/v1），不从模型名推断地址。
 	BaseURL string
@@ -73,14 +82,14 @@ type Tasks struct {
 	ReconnectBackoff time.Duration
 }
 
-// Context 定义模型窗口与预留预算；窗口和输出预算为正，工具与安全预留可为零。
+// Context 定义模型窗口与预留预算；窗口和输出从 MongoDB 模型加载，工具与安全预留可为零。
 // 扣除全部预留后至少留一个输入 Token；实际计数与模型窗口匹配由模型适配器负责。
 type Context struct {
 	// CompressionThresholdPercent 为 0 时禁用压缩，1–100 表示输入预算触发百分比。
 	CompressionThresholdPercent int
 	// KeepRecentRounds 包含当前用户轮次；用户原文、工具消息和当前 Run 永远保留。
 	KeepRecentRounds int
-	// SummaryModel/TokenEncoding 为空时显式沿用主模型配置；端点、凭据和超时共用 Agent。
+	// SummaryModel 加载前为 MongoDB 文档 ID，空值沿用主模型；加载后为供应商模型名。
 	SummaryModel         string
 	SummaryTokenEncoding string
 	SummaryWindowTokens  int
@@ -99,7 +108,7 @@ type Context struct {
 }
 
 // Defaults 返回全新默认值，不访问进程环境，也不保证配置已经可以使用。
-// URI、Provider、Model 没有默认值，调用方必须补齐后 Validate 或使用 Load。
+// MongoDB URI 必须显式设置；生产启动加载模型目录，创建会话时确定模型。
 // Token 默认值只是初始预算，部署时必须根据所选模型调整，不代表任何模型的能力。
 func Defaults() Config {
 	return Config{

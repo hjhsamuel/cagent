@@ -12,9 +12,12 @@ import (
 // 必须仅移除对应调用。Data 可能包含私有上下文，仅限可信运行时和存储适配器使用。
 // Version=0 表示尚未创建；首次保存为 1，此后由存储在 CAS 成功时递增。
 type Checkpoint struct {
-	Scope          Scope
-	RunID          string
-	Caller         AgentExecution
+	Scope  Scope
+	RunID  string
+	Caller AgentExecution
+	// 子 Agent 的模型/凭据绑定只记录在分支检查点中。
+	ModelID        string
+	APIKeyID       string
 	Format         string
 	Data           []byte
 	PendingCallIDs []string
@@ -25,6 +28,9 @@ type Checkpoint struct {
 // ValidateForRun 校验作用域和分支身份，不验证 SDK 检查点是否真正可恢复。
 // Data 允许为空（部分 SDK 用引用或空初始状态），Format 必须显式指定。
 func (c Checkpoint) ValidateForRun(run Run) error {
+	if err := validateModelBinding(c.ModelID, c.APIKeyID); err != nil {
+		return err
+	}
 	if err := run.Validate(); err != nil {
 		return err
 	}

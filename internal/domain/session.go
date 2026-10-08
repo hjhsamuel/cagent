@@ -6,7 +6,10 @@ type Session struct {
 	Scope   Scope
 	ID      string
 	AgentID string
-	Version int64
+	// ModelID/APIKeyID 仅固定主对话模型及凭据引用，不保存 API key 明文。
+	ModelID  string
+	APIKeyID string
+	Version  int64
 	// ActiveRunID 是跨实例会话占用；租约过期不清除此值，仅 Run 终态事务释放。
 	ActiveRunID string
 	CreatedAt   time.Time

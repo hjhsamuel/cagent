@@ -33,6 +33,7 @@ type Options struct {
 	PollInterval  time.Duration
 	Prepare       func(context.Context, domain.Run) (agent.Request, error)
 	Recover       func(context.Context, agent.Request, agent.Emit) error
+	SelectModel   func(string) (config.SelectedModel, error)
 }
 
 // Application 的本地表仅去重和发送取消信号，跨实例所有权完全由 MongoDB 租约保证。
@@ -86,7 +87,23 @@ func newID() string { return bson.NewObjectID().Hex() }
 
 // CreateSession 的 ID 在可信服务内生成；返回数据库实际分配的版本和时间。
 func (a *Application) CreateSession(ctx context.Context, scope domain.Scope, agentID string) (domain.Session, error) {
+	return a.CreateSessionWithModel(ctx, scope, agentID, "")
+}
+
+func (a *Application) CreateSessionWithModel(ctx context.Context, scope domain.Scope, agentID, modelID string) (domain.Session, error) {
 	s := domain.Session{Scope: scope, ID: newID(), AgentID: agentID}
+	if err := scope.Validate(); err != nil {
+		return domain.Session{}, err
+	}
+	if a.opts.SelectModel != nil {
+		selected, err := a.opts.SelectModel(modelID)
+		if err != nil {
+			return domain.Session{}, err
+		}
+		s.ModelID, s.APIKeyID = selected.ModelID, selected.APIKeyID
+	} else if modelID != "" {
+		return domain.Session{}, apperrors.ErrUnsupported
+	}
 	if err := a.db.CreateSession(ctx, s); err != nil {
 		return domain.Session{}, err
 	}

@@ -29,35 +29,12 @@ func NewOpenAIService(parent context.Context, db *mongodb.Database, cfg config.C
 	}
 	lifecycle.Capacity = cfg.Capacity
 	gate := observability.NewGate(cfg.Capacity.Models, "model")
-	llm, err := adk.NewOpenAI(cfg.Agent, nil)
+	if cfg.Models != nil {
+		return newSessionModelService(parent, db, cfg, system, lifecycle, gate, tools...)
+	}
+	runtime, opts, err := buildOpenAIRuntime(cfg, system, gate, tools...)
 	if err != nil {
 		return nil, err
-	}
-	llm.SetCapacity(gate)
-	budget := contextengine.Budget{WindowTokens: cfg.Context.WindowTokens, OutputTokens: cfg.Context.OutputTokens, ToolTokens: cfg.Context.ToolTokens, SafetyTokens: cfg.Context.SafetyTokens}
-	runtime, err := adk.New(llm, llm, budget, tools...)
-	if err != nil {
-		return nil, err
-	}
-	opts := ContextOptions{System: system, Budget: budget, PolicyVersion: cfg.Context.PolicyVersion}
-	if cfg.Context.CompressionThresholdPercent > 0 {
-		summaryCfg := cfg.Agent
-		if cfg.Context.SummaryModel != "" {
-			summaryCfg.Model = cfg.Context.SummaryModel
-		}
-		if cfg.Context.SummaryTokenEncoding != "" {
-			summaryCfg.TokenEncoding = cfg.Context.SummaryTokenEncoding
-		}
-		summaryLLM, e := adk.NewOpenAI(summaryCfg, nil)
-		if e != nil {
-			return nil, e
-		}
-		summaryLLM.SetCapacity(gate)
-		opts.Summarizer, e = adk.NewSummaryModel(summaryLLM, summaryLLM, contextengine.Budget{WindowTokens: cfg.Context.SummaryWindowTokens, OutputTokens: cfg.Context.SummaryOutputTokens, SafetyTokens: cfg.Context.SafetyTokens})
-		if e != nil {
-			return nil, e
-		}
-		opts.Compression = &contextengine.CompressionPolicy{ThresholdPercent: cfg.Context.CompressionThresholdPercent, KeepRecentRounds: cfg.Context.KeepRecentRounds}
 	}
 	return NewADKService(parent, db, runtime, opts, lifecycle)
 }
@@ -102,4 +79,41 @@ func NewADKService(parent context.Context, db *mongodb.Database, runtime *adk.Ru
 	}
 	lifecycle.Recover = runtime.Recover
 	return NewService(parent, db, runtime, lifecycle)
+}
+
+func buildOpenAIRuntime(cfg config.Config, system []domain.Part, gate *observability.Gate, tools ...adk.ToolOptions) (*adk.Runtime, ContextOptions, error) {
+	llm, err := adk.NewOpenAI(cfg.Agent, nil)
+	if err != nil {
+		return nil, ContextOptions{}, err
+	}
+	llm.SetCapacity(gate)
+	budget := contextengine.Budget{WindowTokens: cfg.Context.WindowTokens, OutputTokens: cfg.Context.OutputTokens, ToolTokens: cfg.Context.ToolTokens, SafetyTokens: cfg.Context.SafetyTokens}
+	runtime, err := adk.New(llm, llm, budget, tools...)
+	if err != nil {
+		return nil, ContextOptions{}, err
+	}
+	opts := ContextOptions{System: system, Budget: budget, PolicyVersion: cfg.Context.PolicyVersion}
+	if cfg.Context.CompressionThresholdPercent > 0 {
+		summaryCfg := cfg.Agent
+		if cfg.SummaryAgent != nil {
+			summaryCfg = *cfg.SummaryAgent
+		}
+		if cfg.Context.SummaryModel != "" {
+			summaryCfg.Model = cfg.Context.SummaryModel
+		}
+		if cfg.Context.SummaryTokenEncoding != "" {
+			summaryCfg.TokenEncoding = cfg.Context.SummaryTokenEncoding
+		}
+		summaryLLM, e := adk.NewOpenAI(summaryCfg, nil)
+		if e != nil {
+			return nil, ContextOptions{}, e
+		}
+		summaryLLM.SetCapacity(gate)
+		opts.Summarizer, e = adk.NewSummaryModel(summaryLLM, summaryLLM, contextengine.Budget{WindowTokens: cfg.Context.SummaryWindowTokens, OutputTokens: cfg.Context.SummaryOutputTokens, SafetyTokens: cfg.Context.SafetyTokens})
+		if e != nil {
+			return nil, ContextOptions{}, e
+		}
+		opts.Compression = &contextengine.CompressionPolicy{ThresholdPercent: cfg.Context.CompressionThresholdPercent, KeepRecentRounds: cfg.Context.KeepRecentRounds}
+	}
+	return runtime, opts, nil
 }

@@ -20,6 +20,7 @@ type StartRun struct {
 // 生命周期管理由具体 Application 的 Close/RecoverRun 暴露给可信启动装配。
 type Service interface {
 	CreateSession(context.Context, domain.Scope, string) (domain.Session, error)
+	CreateSessionWithModel(context.Context, domain.Scope, string, string) (domain.Session, error)
 	GetSession(context.Context, domain.Scope, string) (domain.Session, error)
 	StartRun(context.Context, StartRun) (domain.Run, error)
 	GetRun(context.Context, domain.Scope, string) (domain.Run, error)

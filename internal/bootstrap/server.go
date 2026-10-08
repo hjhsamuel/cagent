@@ -27,6 +27,10 @@ func Run(parent context.Context, cfg config.Config) error {
 	if err := cfg.HTTP.ValidateServer(); err != nil {
 		return err
 	}
+	ring, err := config.NewKeyring(cfg.ModelEncryption)
+	if err != nil {
+		return err
+	}
 	db, err := mongodb.Open(parent, mongodb.Options{URI: cfg.MongoDB.URI, Database: cfg.MongoDB.Database, Timeout: 10 * time.Second})
 	if err != nil {
 		return err
@@ -36,6 +40,10 @@ func Run(parent context.Context, cfg config.Config) error {
 		defer cancel()
 		_ = db.Close(ctx)
 	}()
+	cfg, err = loadModels(parent, db, cfg, ring)
+	if err != nil {
+		return err
+	}
 	catalog, maxCalls, closeTools, err := loadTools(parent, cfg.ToolsFile)
 	if err != nil {
 		return err

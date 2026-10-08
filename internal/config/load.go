@@ -39,15 +39,9 @@ func LoadFromEnv(lookup func(string) (string, bool)) (Config, error) {
 		{"CAGENT_MONGODB_URI", &c.MongoDB.URI},
 		{"CAGENT_MONGODB_DATABASE", &c.MongoDB.Database},
 		{"CAGENT_AGENT_NAME", &c.Agent.Name},
-		{"CAGENT_AGENT_PROVIDER", &c.Agent.Provider},
-		{"CAGENT_AGENT_MODEL", &c.Agent.Model},
-		{"CAGENT_AGENT_BASE_URL", &c.Agent.BaseURL},
-		{"CAGENT_AGENT_API_KEY", &c.Agent.APIKey},
-		{"CAGENT_AGENT_TOKEN_ENCODING", &c.Agent.TokenEncoding},
-		{"CAGENT_AGENT_MAX_TOKENS_FIELD", &c.Agent.MaxTokensField},
+		{"CAGENT_MODEL_ENCRYPTION_KEYS", &c.ModelEncryption.KeysJSON},
+		{"CAGENT_MODEL_ENCRYPTION_ACTIVE_VERSION", &c.ModelEncryption.ActiveVersion},
 		{"CAGENT_CONTEXT_POLICY_VERSION", &c.Context.PolicyVersion},
-		{"CAGENT_CONTEXT_SUMMARY_MODEL", &c.Context.SummaryModel},
-		{"CAGENT_CONTEXT_SUMMARY_TOKEN_ENCODING", &c.Context.SummaryTokenEncoding},
 	} {
 		if value, present := lookup(item.key); present {
 			*item.dst = value
@@ -59,7 +53,6 @@ func LoadFromEnv(lookup func(string) (string, bool)) (Config, error) {
 	}{
 		{"CAGENT_HTTP_SSE_HEARTBEAT", "http.sse_heartbeat", &c.HTTP.SSEHeartbeat},
 		{"CAGENT_HTTP_WRITE_TIMEOUT", "http.write_timeout", &c.HTTP.WriteTimeout},
-		{"CAGENT_AGENT_REQUEST_TIMEOUT", "agent.request_timeout", &c.Agent.RequestTimeout},
 		{"CAGENT_HTTP_SHUTDOWN_GRACE", "http.shutdown_grace", &c.HTTP.ShutdownGrace},
 		{"CAGENT_TASKS_POLL_INTERVAL", "tasks.poll_interval", &c.Tasks.PollInterval},
 		{"CAGENT_TASKS_OBSERVATION_TIMEOUT", "tasks.observation_timeout", &c.Tasks.ObservationTimeout},

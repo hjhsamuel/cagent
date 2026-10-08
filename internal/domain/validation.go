@@ -59,7 +59,20 @@ func (s Session) Validate() error {
 	if err := required("session.id", s.ID); err != nil {
 		return err
 	}
-	return required("session.agent_id", s.AgentID)
+	if err := required("session.agent_id", s.AgentID); err != nil {
+		return err
+	}
+	return validateModelBinding(s.ModelID, s.APIKeyID)
+}
+
+func validateModelBinding(modelID, keyID string) error {
+	if modelID == "" && keyID == "" {
+		return nil
+	}
+	if err := required("model_binding.model_id", modelID); err != nil {
+		return err
+	}
+	return required("model_binding.api_key_id", keyID)
 }
 
 // Validate 校验运行的身份及所属会话引用。幂等键允许省略，状态迁移另行处理。

@@ -1,12 +1,13 @@
 package main
 
 import (
-	"github.com/sirupsen/logrus"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sirupsen/logrus"
 )
 
 func TestMissingBusinessConfiguration(t *testing.T) {
@@ -16,6 +17,18 @@ func TestMissingBusinessConfiguration(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("invalid config must fail before opening log: %v", err)
+	}
+}
+
+func TestMissingModelEncryptionFailsBeforeLogInitialization(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server.log")
+	values := map[string]string{"CAGENT_LOG_PATH": path, "CAGENT_MONGODB_URI": "mongodb://localhost:27017", "CAGENT_HTTP_JWT_SECRET": strings.Repeat("a", 32)}
+	// 其他进程参数使用合法默认值，密钥缺失时不能创建日志或连接数据库。
+	if code := run(func(key string) (string, bool) { value, ok := values[key]; return value, ok }); code != 1 {
+		t.Fatal("startup accepted missing encryption")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("invalid encryption initialized logging", err)
 	}
 }
 func TestInvalidLoggingConfiguration(t *testing.T) {

@@ -15,7 +15,7 @@ func TestCompressionConfiguration(t *testing.T) {
 	v["CAGENT_CONTEXT_SUMMARY_WINDOW_TOKENS"] = "4000"
 	v["CAGENT_CONTEXT_SUMMARY_OUTPUT_TOKENS"] = "400"
 	c, e := load(v)
-	if e != nil || c.Context.CompressionThresholdPercent != 65 || c.Context.KeepRecentRounds != 3 || c.Context.SummaryModel != "summary-model" || c.Context.SummaryTokenEncoding != "cl100k_base" || c.Context.SummaryWindowTokens != 4000 || c.Context.SummaryOutputTokens != 400 {
+	if e != nil || c.Context.CompressionThresholdPercent != 65 || c.Context.KeepRecentRounds != 3 || c.Context.SummaryModel != "" || c.Context.SummaryTokenEncoding != "" || c.Context.SummaryWindowTokens != 4000 || c.Context.SummaryOutputTokens != 400 {
 		t.Fatal(c.Context, e)
 	}
 	for _, tt := range []struct{ key, value, field string }{
@@ -23,8 +23,6 @@ func TestCompressionConfiguration(t *testing.T) {
 		{"COMPRESSION_THRESHOLD_PERCENT", "-1", "compression_threshold_percent"},
 		{"COMPRESSION_THRESHOLD_PERCENT", "", "compression_threshold_percent"},
 		{"KEEP_RECENT_ROUNDS", "0", "keep_recent_rounds"},
-		{"SUMMARY_MODEL", " ", "summary_model"},
-		{"SUMMARY_TOKEN_ENCODING", "wrong", "summary_token_encoding"},
 		{"SUMMARY_WINDOW_TOKENS", "900", "summary_window_tokens"},
 		{"SUMMARY_OUTPUT_TOKENS", "0", "summary_window_tokens"},
 	} {

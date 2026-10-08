@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/hjhsamuel/cagent/internal/domain"
+	"github.com/hjhsamuel/cagent/internal/storage/schema"
 	"github.com/hjhsamuel/cagent/internal/store"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -22,9 +23,7 @@ func TestMongoConnectionLossDuringCommit(t *testing.T) {
 	db, _ := testDatabase(t)
 	ctx := context.Background()
 	_, guard := startFixture(t, db)
-	var before, after struct {
-		Count int64 `bson:"count"`
-	}
+	var before, after schema.Count
 	admin := db.client.Database("admin")
 	check(t, admin.RunCommand(ctx, bson.D{
 		{Key: "configureFailPoint", Value: "failCommand"},

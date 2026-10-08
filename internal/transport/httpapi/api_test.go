@@ -60,6 +60,13 @@ func (s *stubService) CreateSession(_ context.Context, scope domain.Scope, agent
 	s.scope = scope
 	return domain.Session{ID: "session", AgentID: agent}, s.err
 }
+
+func (s *stubService) CreateSessionWithModel(ctx context.Context, scope domain.Scope, agent, modelID string) (domain.Session, error) {
+	value, err := s.CreateSession(ctx, scope, agent)
+	value.ModelID = modelID
+	value.APIKeyID = "private-key-reference"
+	return value, err
+}
 func (s *stubService) GetSession(_ context.Context, scope domain.Scope, id string) (domain.Session, error) {
 	s.scope = scope
 	return domain.Session{ID: id}, s.err
@@ -110,6 +117,30 @@ func request(h http.Handler, method, path, body, bearer string) *httptest.Respon
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	return w
+}
+
+func TestCreateSessionModelSelection(t *testing.T) {
+	for _, tt := range []struct {
+		body, model string
+		status      int
+	}{
+		{`{"model_id":"glm"}`, "glm", 201},
+		{`{}`, "", 201},
+		{"", "", 201},
+		{`{"model_id":" "}`, "", 400},
+		{`{"model_id":123}`, "", 400},
+		{`{`, "", 400},
+		{`{} {}`, "", 400},
+	} {
+		s := new(stubService)
+		w := request(handler(t, s, stubEvents{}, settings()), "POST", "/api/v1/sessions", tt.body, token(t))
+		if w.Code != tt.status || strings.Contains(w.Body.String(), "private-key-reference") || strings.Contains(w.Body.String(), "api_key") {
+			t.Fatalf("body %q: %d %s", tt.body, w.Code, w.Body.String())
+		}
+		if tt.model != "" && !strings.Contains(w.Body.String(), `"model_id":"`+tt.model+`"`) {
+			t.Fatal("selected model missing in DTO")
+		}
+	}
 }
 
 func TestJWTRejectsUntrustedIdentity(t *testing.T) {
