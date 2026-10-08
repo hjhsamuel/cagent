@@ -1,0 +1,15 @@
+{
+  "timeout": "30s",
+  "max_input_bytes": 1048576,
+  "max_output_bytes": 1048576,
+  "max_model_calls": 16,
+  "connections": [
+    {
+      "tenant_id": "example-tenant",
+      "user_id": "example-user",
+      "id": "local-tools",
+      "protocol": "local",
+      "tools": ["echo"]
+    }
+  ]
+}
