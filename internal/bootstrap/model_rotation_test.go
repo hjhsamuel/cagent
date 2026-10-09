@@ -106,7 +106,7 @@ func TestKeysValidatedOnUse(t *testing.T) {
 	for _, mode := range []string{"missing", "invalid_aes", "ciphertext", "nonce", "version"} {
 		t.Run(mode, func(t *testing.T) {
 			cfg, _, docs := modelFixture(t)
-			cfg.ModelEncryption.Keys = map[string]string{"v1": "MDEyMzQ1Njc4OWFiY2RlZg=="}
+			cfg.ModelEncryption.Keys = map[string]string{"v1": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}
 			doc := docs["main"]
 			switch mode {
 			case "missing":
@@ -137,11 +137,11 @@ func TestKeysValidatedOnUse(t *testing.T) {
 
 func TestPersistModelKeysPreservesEnv(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".env")
-	const before = "# config\nOTHER=keep\nCAGENT_MODEL_ENCRYPTION_KEY_V1=MDEyMzQ1Njc4OWFiY2RlZg==\n"
+	const before = "# config\nOTHER=keep\nCAGENT_MODEL_ENCRYPTION_KEY_V1=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=\n"
 	if err := os.WriteFile(path, []byte(before), 0600); err != nil {
 		t.Fatal(err)
 	}
-	keys := config.ModelEncryption{Keys: map[string]string{"v1": "MDEyMzQ1Njc4OWFiY2RlZg==", "v2": "ZmVkY2JhOTg3NjU0MzIxMA=="}}
+	keys := config.ModelEncryption{Keys: map[string]string{"v1": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=", "v2": "ZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTA="}}
 	if err := persistModelKeys(path, keys); err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestPersistModelKeysPreservesEnv(t *testing.T) {
 
 func TestRotationPersistenceAndRetry(t *testing.T) {
 	cfg, _, docs := modelFixture(t)
-	encryption := config.ModelEncryption{Keys: map[string]string{"v1": "MDEyMzQ1Njc4OWFiY2RlZg=="}}
+	encryption := config.ModelEncryption{Keys: map[string]string{"v1": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}}
 	loaded, err := loadModels(context.Background(), docs, cfg, config.NewDeferredKeyring(encryption))
 	if err != nil {
 		t.Fatal(err)

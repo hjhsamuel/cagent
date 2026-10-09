@@ -1,8 +1,6 @@
 package config
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -14,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/hjhsamuel/cagent/internal/storage/schema"
+	"github.com/hjhsamuel/cagent/pkg/kms"
 )
 
 // ModelEncryption 保存各版本的 Base64 AES 密钥，禁止整体打印。
@@ -58,7 +57,7 @@ func encryptionVersion(version string) (uint64, error) {
 
 // Keyring 不暴露密钥材料。版本作为附加认证数据，禁止篡改版本后解密。
 type Keyring struct {
-	keys     map[string]cipher.AEAD
+	keys     map[string][]byte
 	active   string
 	deferred *ModelEncryption
 }
@@ -76,7 +75,7 @@ func NewKeyring(c ModelEncryption) (*Keyring, error) {
 	if len(c.Keys) == 0 {
 		return nil, invalid("model_encryption.keys", "at least one versioned base64 AES key is required")
 	}
-	k := &Keyring{keys: make(map[string]cipher.AEAD)}
+	k := &Keyring{keys: make(map[string][]byte)}
 	var newest uint64
 	for version, value := range c.Keys {
 		n, err := encryptionVersion(version)
@@ -87,18 +86,10 @@ func NewKeyring(c ModelEncryption) (*Keyring, error) {
 			newest, k.active = n, version
 		}
 		key, err := base64.StdEncoding.DecodeString(value)
-		if err != nil || (len(key) != 16 && len(key) != 24 && len(key) != 32) {
-			return nil, invalid("model_encryption.keys", "AES keys must encode 16, 24 or 32 bytes")
+		if err != nil || kms.ValidateKey(key) != nil {
+			return nil, invalid("model_encryption.keys", "AES keys must encode 32 bytes")
 		}
-		block, err := aes.NewCipher(key)
-		if err != nil {
-			return nil, invalid("model_encryption.keys", "invalid AES key")
-		}
-		aead, err := cipher.NewGCM(block)
-		if err != nil {
-			return nil, invalid("model_encryption.keys", "invalid AES-GCM key")
-		}
-		k.keys[version] = aead
+		k.keys[version] = key
 	}
 	return k, nil
 }
@@ -114,13 +105,11 @@ func (k *Keyring) Encrypt(plaintext string, weight int64) (schema.EncryptedKey, 
 	if k == nil || k.keys[k.active] == nil || strings.TrimSpace(plaintext) == "" || weight < 0 {
 		return schema.EncryptedKey{}, invalid("model.api_keys", "invalid encryption input")
 	}
-	aead := k.keys[k.active]
-	nonce := make([]byte, aead.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return schema.EncryptedKey{}, invalid("model.api_keys", "cannot generate encryption nonce")
+	encrypted, err := kms.EncryptWithAAD(k.keys[k.active], plaintext, []byte(k.active))
+	if err != nil {
+		return schema.EncryptedKey{}, invalid("model.api_keys", "cannot encrypt API key")
 	}
-	sealed := aead.Seal(nil, nonce, []byte(plaintext), []byte(k.active))
-	key := schema.EncryptedKey{Version: k.active, Ciphertext: base64.StdEncoding.EncodeToString(sealed), Nonce: base64.StdEncoding.EncodeToString(nonce), Weight: weight}
+	key := schema.EncryptedKey{Version: k.active, Ciphertext: base64.StdEncoding.EncodeToString(encrypted.Ciphertext), Nonce: base64.StdEncoding.EncodeToString(encrypted.Nonce), Weight: weight}
 	key.ID = StoredKeyID(key)
 	return key, nil
 }
@@ -145,20 +134,19 @@ func (k *Keyring) Decrypt(key schema.EncryptedKey) (string, error) {
 	if k == nil || k.keys[key.Version] == nil {
 		return "", invalid("model.api_keys", "unknown encryption key version")
 	}
-	aead := k.keys[key.Version]
 	nonce, err := base64.StdEncoding.DecodeString(key.Nonce)
-	if err != nil || len(nonce) != aead.NonceSize() {
+	if err != nil || len(nonce) != kms.NonceSize {
 		return "", invalid("model.api_keys.nonce", "nonce must be base64 encoded with the AES-GCM nonce size")
 	}
 	data, err := base64.StdEncoding.DecodeString(key.Ciphertext)
-	if err != nil || len(data) < aead.Overhead() {
+	if err != nil || len(data) < kms.TagSize {
 		return "", invalid("model.api_keys", "invalid encrypted API key")
 	}
-	plain, err := aead.Open(nil, nonce, data, []byte(key.Version))
-	if err != nil || strings.TrimSpace(string(plain)) == "" {
+	plain, err := kms.DecryptWithAAD(k.keys[key.Version], data, nonce, []byte(key.Version))
+	if err != nil || strings.TrimSpace(plain) == "" {
 		return "", invalid("model.api_keys", "API key authentication failed")
 	}
-	return string(plain), nil
+	return plain, nil
 }
 
 type weightedKey struct {

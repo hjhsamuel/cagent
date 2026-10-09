@@ -44,7 +44,7 @@ const modelBody = `{"model":"vendor-model","provider":"GLM","base_url":"https://
 
 func TestModelManagementHTTP(t *testing.T) {
 	cfg := settings()
-	catalog, _ := config.NewModelCatalog(nil, "agent", config.NewDeferredKeyring(config.ModelEncryption{Keys: map[string]string{"v1": "MDEyMzQ1Njc4OWFiY2RlZg=="}}))
+	catalog, _ := config.NewModelCatalog(nil, "agent", config.NewDeferredKeyring(config.ModelEncryption{Keys: map[string]string{"v1": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}}))
 	models := &adminModels{catalog: catalog}
 	handler, err := httpapi.NewWithModelManagement(&stubService{}, &stubEvents{}, cfg, "agent", models, nil, func(context.Context) bool { return true })
 	if err != nil {

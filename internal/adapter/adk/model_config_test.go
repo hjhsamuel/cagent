@@ -47,7 +47,7 @@ func TestWeightedKeysAndThinkingOnBothWirePaths(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			ring, err := config.NewKeyring(config.ModelEncryption{Keys: map[string]string{"v1": "MDEyMzQ1Njc4OWFiY2RlZg=="}})
+			ring, err := config.NewKeyring(config.ModelEncryption{Keys: map[string]string{"v1": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}})
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -13,9 +13,9 @@ import (
 
 func testRing(t *testing.T, active string) *Keyring {
 	t.Helper()
-	keys := map[string]string{"v1": "MDEyMzQ1Njc4OWFiY2RlZg=="}
+	keys := map[string]string{"v1": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}
 	if active == "v2" {
-		keys["v2"] = "ZmVkY2JhOTg3NjU0MzIxMA=="
+		keys["v2"] = "ZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTA="
 	}
 	k, err := NewKeyring(ModelEncryption{Keys: keys})
 	if err != nil {
@@ -74,18 +74,66 @@ func TestAESGCMRotationAndAuthentication(t *testing.T) {
 	}
 }
 
+func TestKeyringDecryptsExistingStoredKeys(t *testing.T) {
+	// Fixed records produced by the previous keyring implementation, with v1 as AAD.
+	for _, tc := range []struct{ material, ciphertext string }{
+		{"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=", "a7OuKCku7JyjpZG7OcSw19YJcs61qkmGWwJLRv8X6UY1"},
+	} {
+		// Reusing key material across versions must not allow version tampering.
+		ring, err := NewKeyring(ModelEncryption{Keys: map[string]string{"v1": tc.material, "v2": tc.material}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored := schema.EncryptedKey{ID: "existing-key", Version: "v1", Ciphertext: tc.ciphertext, Nonce: "AgICAgICAgICAgIC", Weight: 3}
+		plain, err := ring.Decrypt(stored)
+		if err != nil || plain != "legacy-api-secret" {
+			t.Fatal("existing stored API key could not be decrypted", err)
+		}
+		rotated, err := ring.Encrypt(plain, stored.Weight)
+		if err != nil || rotated.Version != "v2" || rotated.Weight != stored.Weight {
+			t.Fatal("existing stored API key could not be rotated", err)
+		}
+		if got, err := ring.Decrypt(rotated); err != nil || got != plain {
+			t.Fatal("rotation changed existing API key", err)
+		}
+		stored.Version = "v2"
+		if plain, err := ring.Decrypt(stored); err == nil || plain != "" {
+			t.Fatal("version tampering accepted with identical key material")
+		}
+	}
+}
+
 func TestKeyringRejectsInvalidConfig(t *testing.T) {
-	for _, cfg := range []ModelEncryption{{}, {Keys: map[string]string{}}, {Keys: map[string]string{"v1": "secret-invalid-base64"}}, {Keys: map[string]string{"v1": "YWJj"}}, {Keys: map[string]string{"missing": "MDEyMzQ1Njc4OWFiY2RlZg=="}}, {Keys: map[string]string{"v01": "MDEyMzQ1Njc4OWFiY2RlZg=="}}, {Keys: map[string]string{"v0": "MDEyMzQ1Njc4OWFiY2RlZg=="}}} {
+	for _, cfg := range []ModelEncryption{{}, {Keys: map[string]string{}}, {Keys: map[string]string{"v1": "secret-invalid-base64"}}, {Keys: map[string]string{"v1": "YWJj"}}, {Keys: map[string]string{"missing": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}}, {Keys: map[string]string{"v01": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}}, {Keys: map[string]string{"v0": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}}} {
 		if ring, err := NewKeyring(cfg); err == nil || ring != nil {
 			t.Fatal("invalid keyring accepted")
 		}
 	}
 }
 
+func TestKeyringRejectsNonAES256Keys(t *testing.T) {
+	for _, size := range []int{16, 24, 31, 33} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			material := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", size)))
+			cfg := ModelEncryption{Keys: map[string]string{"v1": material}}
+			if ring, err := NewKeyring(cfg); err == nil || ring != nil {
+				t.Fatal("accepted a key that is not 32 bytes")
+			}
+			ring := NewDeferredKeyring(cfg)
+			if _, err := ring.Encrypt("api-secret", 1); err == nil {
+				t.Fatal("deferred keyring encrypted with a key that is not 32 bytes")
+			}
+			if plain, err := ring.Decrypt(schema.EncryptedKey{Version: "v1"}); err == nil || plain != "" {
+				t.Fatal("deferred keyring decrypted with a key that is not 32 bytes")
+			}
+		})
+	}
+}
+
 func TestVersionedEnvironmentAndNumericOrdering(t *testing.T) {
 	values := map[string]string{
-		"CAGENT_MODEL_ENCRYPTION_KEY_V2":  "MDEyMzQ1Njc4OWFiY2RlZg==",
-		"CAGENT_MODEL_ENCRYPTION_KEY_V10": "ZmVkY2JhOTg3NjU0MzIxMA==",
+		"CAGENT_MODEL_ENCRYPTION_KEY_V2":  "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+		"CAGENT_MODEL_ENCRYPTION_KEY_V10": "ZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTA=",
 	}
 	reads := map[string]int{}
 	lookup := func(name string) (string, bool) {

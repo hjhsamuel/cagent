@@ -99,7 +99,7 @@ CAGENT_MODEL_ENCRYPTION_KEY_V1=BASE64_AES_KEY_V1
 CAGENT_MODEL_ENCRYPTION_KEY_V2=BASE64_AES_KEY_V2
 ```
 
-算法固定为 AES-GCM，轮换默认生成随机 32 字节（256 bit）AES 密钥，以 Base64 编码保存；兼容加载已有的 16/24/32 字节 AES 密钥。每次加密生成随机 nonce；版本字符串作为附加认证数据。数据库中不保存 AES 密钥，密钥版本可同时存在以支持分阶段轮换。不要记录完整环境、配置或明文 API key。
+算法固定为 AES-256-GCM，密钥固定使用 32 字节（256 bit），以 Base64 编码保存；加载时要求 Base64 解码后的密钥恰好为 32 字节，拒绝其他长度。轮换生成随机 32 字节 AES 密钥。每次加密生成随机 nonce；版本字符串作为附加认证数据。数据库中不保存 AES 密钥，密钥版本可同时存在以支持分阶段轮换。不要记录完整环境、配置或明文 API key。
 
 ## 密文格式与轮换
 

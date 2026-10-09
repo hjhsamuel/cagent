@@ -16,7 +16,7 @@ func adminInput() ModelInput {
 }
 
 func TestModelAdministrationPersistenceAndBindings(t *testing.T) {
-	c, err := NewModelCatalog(nil, "agent", NewDeferredKeyring(ModelEncryption{Keys: map[string]string{"v1": "MDEyMzQ1Njc4OWFiY2RlZg=="}}))
+	c, err := NewModelCatalog(nil, "agent", NewDeferredKeyring(ModelEncryption{Keys: map[string]string{"v1": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}}))
 	if err != nil {
 		t.Fatal(err)
 	}

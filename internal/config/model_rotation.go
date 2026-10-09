@@ -7,10 +7,11 @@ import (
 	"strconv"
 
 	"github.com/hjhsamuel/cagent/internal/storage/schema"
+	"github.com/hjhsamuel/cagent/pkg/kms"
 )
 
 // 默认生成 32 字节 AES-256 密钥，Base64 仅用于持久化编码。
-const defaultModelEncryptionKeyBytes = 32
+const defaultModelEncryptionKeyBytes = kms.KeyLength
 
 // RotateKeys 仅在调用时生成服务端密钥；持久化成功后发布新目录，保留稳定凭据引用。
 func (c *ModelCatalog) RotateKeys(persistKeys func(ModelEncryption) error, persistModels func([]schema.Model, []schema.Model) error) (string, error) {
