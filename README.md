@@ -11,7 +11,7 @@ cagent 是使用 Go 构建的多租户、多用户 Agent 服务。它通过 HTTP
 | 事件服务 | 消息增量、工具进度和运行终态先持久化，再通过 SSE 重放与跟随，支持跨实例订阅和断点重连 |
 | 工具服务 | 按租户和用户注册、发现及授权工具，校验参数和结果，统一接纳即时结果或远端任务句柄 |
 | 长任务服务 | 保存已启动任务，持续查询或订阅进度；终态结果原子接纳后恢复原工具调用 |
-| 上下文工程 | 按模型窗口计算 Token 预算，生成版本化摘要；保留用户原文、系统约束、工具调用/结果和未完成调用 |
+| 上下文工程 | 依据 LLM 报告的用量生成版本化摘要；保留用户原文、系统约束、工具调用/结果和未完成调用 |
 | 持久化与恢复 | MongoDB 事务、版本校验、租约 Fence 和幂等回执；启动扫描未完成运行及未结算任务 |
 | 运行保障 | 并发容量控制、日志脱敏与轮转、健康检查、指标、本地有界追踪和优雅关闭 |
 
@@ -31,7 +31,7 @@ cagent/
 │   ├── app/                     # 会话、Run、任务、分支、事件与恢复用例
 │   ├── agent/                   # 运行时、任务跟踪及恢复边界
 │   ├── domain/                  # 领域对象、状态迁移与作用域校验
-│   ├── contextengine/           # 上下文组装、预算检查与压缩策略
+│   ├── contextengine/           # 上下文组装与用量触发的摘要策略
 │   ├── tool/                    # 工具注册、发现、执行与任务能力契约
 │   ├── store/                   # 存储请求/结果、事务契约与纯校验
 │   ├── storage/schema/          # 集合名称与 BSON 文档结构
@@ -85,7 +85,7 @@ flowchart TD
 
 1. HTTP 验证 JWT，将 `tenant_id` 和 `sub` 转换为可信作用域。
 2. 创建会话时选择模型文档和加权 API key；提交 Run 时原子保存输入、运行记录、幂等回执及会话占用，返回 `202`。
-3. 后台运行获取租约，读取历史与摘要，检查 Token 预算后调用模型。消息和事件持久化后可被 SSE 消费。
+3. 后台运行获取租约，读取历史与摘要，校验历史和工具关联后调用模型。消息和事件持久化后可被 SSE 消费。
 4. 工具返回即时结果时继续模型调用；返回任务句柄时保存 Task 和检查点，观察同一远端任务。所有未完成分支均在等待时，Run 状态为 `waiting_tool`。
 5. 任务终态结果与检查点、交付状态通过事务接纳，恢复原调用分支；Run 完成、失败或取消时释放会话占用。
 
@@ -103,7 +103,7 @@ MongoDB 保存 `sessions`、`messages`、`runs`、`events`、`tasks`、`context_
 
 - Go 工具链满足 [go.mod](go.mod) 的版本要求，当前声明为 `1.27.1`。
 - 可访问的 MongoDB 副本集或支持事务的 mongos；standalone 不受支持，本地也应初始化副本集。
-- 可用的 OpenAI 兼容模型端点，以及匹配该模型的 Token 编码、窗口和输出预算。
+- 可用的 OpenAI 兼容模型端点。
 - 本服务登录接口或可信身份服务签发的 HS256 JWT。
 
 以下示例在仓库根目录使用 PowerShell 执行。
@@ -128,7 +128,7 @@ CAGENT_LOG_PATH=./logs/cagent.log
 
 替换占位值，并使 `replicaSet` 与数据库副本集名称一致。无须填写 AES 密钥；首次启动后调用 `POST /debug/model-keys/rotate`，服务自动生成 32 字节 AES 密钥并保存到 `.env`，然后通过模型管理接口添加模型。启动、重启和添加模型均不会生成 AES 密钥。`server` 自动读取工作目录的 `.env`；优先级为默认值 < `.env` < 已设置的环境变量，显式空值不会回退。
 
-模型名称、API 地址、凭据和 Token 配置来自 MongoDB `models` 集合。推荐通过 [模型配置 HTTP API](docs/models.md#模型配置-http-api) 提交供应商 API key，由服务自动加密并保存。下面展示 MongoDB 持久化结构，端点、模型名、密文和预算均为示例：
+模型名称、API 地址、凭据和请求选项来自 MongoDB `models` 集合。推荐通过 [模型配置 HTTP API](docs/models.md#模型配置-http-api) 提交供应商 API key，由服务自动加密并保存。下面展示 MongoDB 持久化结构，端点、模型名和密文均为示例：
 
 ```json
 {
@@ -146,16 +146,13 @@ CAGENT_LOG_PATH=./logs/cagent.log
     }
   ],
   "config": {
-    "token_encoding": "o200k_base",
-    "max_tokens_field": "max_tokens",
-    "request_timeout": "2m",
     "window_tokens": 32768,
-    "output_tokens": 4096
+    "request_timeout": "2m"
   }
 }
 ```
 
-此文档只演示结构，地址和模型名是占位值。编码可选 `cl100k_base` 或 `o200k_base`；窗口必须大于输出、工具与安全预留之和。启动时加载模型并校验模型参数，密钥在使用时校验；直接修改 MongoDB 后需重启，通过运维 HTTP 管理模型配置则保存后本实例立即生效。HTTP AES 密钥轮换立即生效并同步写入 `.env`。配置及密钥轮换见 [模型配置](docs/models.md)。
+此文档只演示结构，地址和模型名是占位值。上下文不计算 Token 预算，不设置输出 Token 限额；自动摘要依据最新 LLM 响应的 `prompt_tokens` 触发，默认阈值为主模型 `config.window_tokens` 的 80%（`CAGENT_CONTEXT_COMPRESSION_THRESHOLD_PERCENT` 可调整），默认保留近期 2 轮。启动时加载模型并校验模型参数，密钥在使用时校验；直接修改 MongoDB 后需重启，通过运维 HTTP 管理模型配置则保存后本实例立即生效。HTTP AES 密钥轮换立即生效并同步写入 `.env`。配置及密钥轮换见 [模型配置](docs/models.md)。
 
 模型管理接口无需认证：`GET /debug/models` 查询目录，`GET /debug/models/:modelID` 查询配置，`PUT /debug/models/:modelID` 新增或完整替换配置，`DELETE /debug/models/:modelID` 删除配置。PUT 支持提交供应商 API key 明文并自动加密，响应不返回明文或密文。`POST /debug/model-keys/rotate` 轮换 AES 加密密钥。模型管理和密钥轮换接口在装配对应依赖后注册。请求示例见 [模型配置 HTTP API](docs/models.md#模型配置-http-api)。
 

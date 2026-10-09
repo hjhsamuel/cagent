@@ -22,7 +22,7 @@ func TestCatalogSelectionAndStableBindings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc := schema.Model{ID: "first", Model: "vendor-first", Provider: "GLM", BaseURL: "https://example.invalid/v1", APIKeys: []schema.EncryptedKey{key, disabled, second}, Options: schema.ModelConfig{TokenEncoding: "o200k_base", MaxTokensField: "max_tokens", RequestTimeout: "2s", WindowTokens: 8192, OutputTokens: 2048}}
+	doc := schema.Model{ID: "first", Model: "vendor-first", Provider: "GLM", BaseURL: "https://example.invalid/v1", APIKeys: []schema.EncryptedKey{key, disabled, second}, Options: schema.ModelConfig{WindowTokens: 32768, RequestTimeout: "2s"}}
 	other := doc
 	other.ID, other.Model = "second", "vendor-second"
 	c, err := NewModelCatalog([]schema.Model{doc, other}, "agent", ring)

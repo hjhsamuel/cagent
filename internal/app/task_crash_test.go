@@ -75,20 +75,16 @@ func TestPartialHandoffRepairIncludesCancelledRun(t *testing.T) {
 				t.Fatal(e)
 			}
 			cfg := adkConfig(model.URL)
-			budget := contextengine.Budget{WindowTokens: cfg.Context.WindowTokens, OutputTokens: cfg.Context.OutputTokens, ToolTokens: cfg.Context.ToolTokens, SafetyTokens: cfg.Context.SafetyTokens}
 			llm, e := adk.NewOpenAI(cfg.Agent, nil)
 			if e != nil {
 				t.Fatal(e)
 			}
-			runtime, e := adk.New(llm, llm, budget, adk.ToolOptions{Registry: catalog, MaxModelCalls: 4})
+			runtime, e := adk.New(llm, adk.ToolOptions{Registry: catalog, MaxModelCalls: 4})
 			if e != nil {
 				t.Fatal(e)
 			}
-			engine, e := contextengine.New(runtime)
-			if e != nil {
-				t.Fatal(e)
-			}
-			prepare, e := NewContextPreparer(db, engine, ContextOptions{Budget: budget, PolicyVersion: cfg.Context.PolicyVersion})
+			engine := contextengine.New()
+			prepare, e := NewContextPreparer(db, engine, ContextOptions{PolicyVersion: cfg.Context.PolicyVersion})
 			if e != nil {
 				t.Fatal(e)
 			}

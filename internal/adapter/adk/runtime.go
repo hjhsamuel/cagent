@@ -5,12 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"math"
 	"strings"
 
 	"github.com/hjhsamuel/cagent/internal/agent"
-	"github.com/hjhsamuel/cagent/internal/apperrors"
-	"github.com/hjhsamuel/cagent/internal/contextengine"
 	"github.com/hjhsamuel/cagent/internal/domain"
 	sdkagent "google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
@@ -20,25 +17,17 @@ import (
 	"google.golang.org/genai"
 )
 
-// Runtime 只共享无会话状态的模型和计数器。每次 Execute 创建独立 Agent/Runner/
+// Runtime 只共享无会话状态的模型。每次 Execute 创建独立 Agent/Runner/
 // SDK Session，持久真相仍在 MongoDB，内存会话只是一次运行的 SDK 执行载体。
 type Runtime struct {
 	model       model.LLM
-	counter     RequestCounter
-	budget      contextengine.Budget
 	toolOptions ToolOptions
 }
 
-// New 固定模型、计数器与预算；不建立网络连接，也不共享各 Run 的 SDK 会话。
-func New(llm model.LLM, counter RequestCounter, budget contextengine.Budget, options ...ToolOptions) (*Runtime, error) {
-	if llm == nil || counter == nil {
+// New 固定模型和工具选项；不建立网络连接，也不共享各 Run 的 SDK 会话。
+func New(llm model.LLM, options ...ToolOptions) (*Runtime, error) {
+	if llm == nil {
 		return nil, invalid("runtime.dependencies")
-	}
-	if _, e := budget.InputLimit(); e != nil {
-		return nil, e
-	}
-	if budget.OutputTokens > math.MaxInt32 {
-		return nil, invalid("runtime.output_tokens")
 	}
 	var opt ToolOptions
 	if len(options) > 1 {
@@ -50,16 +39,7 @@ func New(llm model.LLM, counter RequestCounter, budget contextengine.Budget, opt
 			return nil, invalid("runtime.tools")
 		}
 	}
-	return &Runtime{model: llm, counter: counter, budget: budget, toolOptions: opt}, nil
-}
-
-// Count 实现 P5 TokenCounter，与执行使用同一个消息转换/输出配置。
-func (r *Runtime) Count(ctx context.Context, messages []domain.Message) (int, error) {
-	req, e := mapMessages(messages, r.model.Name(), int32(r.budget.OutputTokens))
-	if e != nil {
-		return 0, e
-	}
-	return r.counter.CountRequest(ctx, req)
+	return &Runtime{model: llm, toolOptions: opt}, nil
 }
 
 // OutputData 是事件 Data 的稳定 JSON 载荷；明确区分原应用调用链与 SDK InvocationID。
@@ -75,7 +55,7 @@ type OutputData struct {
 }
 
 // Execute 经真实 ADK Runner/LLMAgent 调用模型，禁用 SDK 自动历史拼装与压缩。
-// BeforeModel 精确注入已经过 P5 的上下文并重新计数，因此 ADK 默认指令不能绕过预算。
+// BeforeModel 精确注入已经组装的上下文，保留系统指令及结构化工具历史。
 // 未配置工具时只允许一次文本生成；配置后按 MaxModelCalls 有界循环，
 // 即时调用/结果分别持久化，真实任务句柄经暂停检查点交接，结果由 Resume 接纳。
 func (r *Runtime) Execute(ctx context.Context, req agent.Request, emit agent.Emit) error {
@@ -119,7 +99,7 @@ func (r *Runtime) run(ctx context.Context, req agent.Request, emit agent.Emit) e
 			return invalid("runtime.messages")
 		}
 	}
-	mapped, e := mapMessages(req.Messages, r.model.Name(), int32(r.budget.OutputTokens))
+	mapped, e := mapMessages(req.Messages, r.model.Name())
 	if e != nil {
 		return e
 	}
@@ -178,7 +158,7 @@ func (r *Runtime) run(ctx context.Context, req agent.Request, emit agent.Emit) e
 			if calls > maxCalls {
 				return nil, unsupported("runtime.multiple_model_calls")
 			}
-			// 用 JSON 深拷贝让 SDK/模型无法修改原映射，后续计数覆盖所有实际发送内容。
+			// 用 JSON 深拷贝让 SDK/模型无法修改原映射，各次调用保持输入隔离。
 			// 保留 SDK 打包的可执行工具和声明；初始上下文与本轮工具历史由本适配器维护。
 			declarations := out.Config.Tools
 			data, err := json.Marshal(mapped)
@@ -195,17 +175,6 @@ func (r *Runtime) run(ctx context.Context, req agent.Request, emit agent.Emit) e
 				return nil, safeError(err)
 			}
 			out.Config.Tools = declarations
-			n, err := r.counter.CountRequest(c, out)
-			if err != nil {
-				return nil, err
-			}
-			limit, _ := r.budget.InputLimit()
-			if n <= 0 {
-				return nil, invalid("runtime.tokens")
-			}
-			if n > limit {
-				return nil, apperrors.Wrap(apperrors.ErrInvalidArgument, "context.budget", "context input exceeds token budget", contextengine.ErrBudgetExceeded)
-			}
 			return nil, nil
 		}}})
 	if e != nil {
@@ -254,7 +223,7 @@ func (r *Runtime) run(ctx context.Context, req agent.Request, emit agent.Emit) e
 				}
 				ev.Content = filtered
 			}
-			isTool, err := toolEvent(ctx, emit, ev.Content, state)
+			isTool, err := toolEvent(ctx, emit, ev.Content, state, outputData(req, ev, "").PromptTokens)
 			if err != nil {
 				return err
 			}
@@ -370,7 +339,7 @@ func (r *Runtime) run(ctx context.Context, req agent.Request, emit agent.Emit) e
 	if req.Checkpoint != nil {
 		cp.Version = req.Checkpoint.Version
 	}
-	return emit(ctx, agent.Update{Kind: domain.EventMessageCompleted, Data: data, Message: parts, Checkpoint: cp})
+	return emit(ctx, agent.Update{Kind: domain.EventMessageCompleted, Data: data, Message: parts, Checkpoint: cp, PromptTokens: outputData(req, final, "").PromptTokens})
 }
 func outputData(req agent.Request, ev *session.Event, text string) OutputData {
 	v := OutputData{AgentID: req.Caller.AgentID, InvocationID: req.Caller.InvocationID, ParentInvocationID: req.Caller.ParentInvocationID, SDKInvocationID: ev.InvocationID, Text: text}
@@ -382,4 +351,3 @@ func outputData(req agent.Request, ev *session.Event, text string) OutputData {
 }
 
 var _ agent.Runtime = (*Runtime)(nil)
-var _ contextengine.TokenCounter = (*Runtime)(nil)

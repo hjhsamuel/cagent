@@ -59,6 +59,13 @@ func mutationDigest(kind store.MutationKind, taskID string, status domain.RunSta
 			checkpoint = &v
 		}
 	}
+	for _, m := range ms {
+		if m.PromptTokens != 0 {
+			// 新用量字段参与重试身份；没有用量的旧回执保持原编码。
+			format = "cagent-mutation-v3"
+			break
+		}
+	}
 	payload := struct {
 		Format     string
 		Kind       store.MutationKind

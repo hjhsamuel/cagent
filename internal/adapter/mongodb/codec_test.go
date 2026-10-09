@@ -56,6 +56,16 @@ func TestMutationDigestIsStableAndSensitiveToContent(t *testing.T) {
 	if first != again {
 		t.Fatal("storage fields affected retry digest")
 	}
+	ms[0].PromptTokens = 8192
+	usage, err := mutationDigest(store.MutationRunCommit, "", domain.RunRunning, ms, events, &cp)
+	check(t, err)
+	ms[0].PromptTokens = 8193
+	otherUsage, err := mutationDigest(store.MutationRunCommit, "", domain.RunRunning, ms, events, &cp)
+	check(t, err)
+	if usage == first || usage == otherUsage {
+		t.Fatal("reported usage absent from retry identity")
+	}
+	ms[0].PromptTokens = 0
 	ms[0].ID = "changed"
 	different, err := mutationDigest(store.MutationRunCommit, "", domain.RunRunning, ms, events, &cp)
 	check(t, err)

@@ -28,12 +28,6 @@ func (a Agent) ValidateOpenAI() error {
 	if e != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return invalid("agent.base_url", "must be an HTTP API base URL without credentials, query or fragment")
 	}
-	if a.TokenEncoding != "cl100k_base" && a.TokenEncoding != "o200k_base" {
-		return invalid("agent.token_encoding", "must explicitly match a supported tokenizer encoding")
-	}
-	if a.MaxTokensField != "max_tokens" && a.MaxTokensField != "max_completion_tokens" {
-		return invalid("agent.max_tokens_field", "unsupported output limit field")
-	}
 	if a.RequestTimeout <= 0 {
 		return invalid("agent.request_timeout", "must be positive")
 	}

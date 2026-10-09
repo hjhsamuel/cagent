@@ -67,27 +67,6 @@ func (c Config) Validate() error {
 			return invalid(item.field, "must be greater than zero")
 		}
 	}
-	if c.Context.WindowTokens <= 0 {
-		return invalid("context.window_tokens", "must be greater than zero")
-	}
-	if c.Context.OutputTokens <= 0 {
-		return invalid("context.output_tokens", "must be greater than zero")
-	}
-	if c.Context.ToolTokens < 0 {
-		return invalid("context.tool_tokens", "must not be negative")
-	}
-	if c.Context.SafetyTokens < 0 {
-		return invalid("context.safety_tokens", "must not be negative")
-	}
-	// 不先相加：多个接近 MaxInt 的合法整数相加可能溢出，绕过总预算检查。
-	// 每次先与正的剩余额度比较再扣减，确保全程无溢出且输入至少剩余一个 Token。
-	remaining := c.Context.WindowTokens
-	for _, reserve := range []int{c.Context.OutputTokens, c.Context.ToolTokens, c.Context.SafetyTokens} {
-		if reserve >= remaining {
-			return invalid("context.window_tokens", "must exceed the total output, tool and safety token reserves")
-		}
-		remaining -= reserve
-	}
 	return c.Context.ValidateCompression()
 }
 

@@ -25,30 +25,13 @@ func TestCompressionRejectsInvalidHistoryBeforeSummary(t *testing.T) {
 	} {
 		in := compressInput()
 		change(&in)
-		b, _ := NewCompressing(counterFunc(testCount), summaryFunc(func(context.Context, []domain.Message) (string, error) {
+		b, _ := NewCompressing(summaryFunc(func(context.Context, []domain.Message) (string, error) {
 			t.Error("invalid data sent to summary")
 			return "facts", nil
-		}), CompressionPolicy{1, 1})
+		}), CompressionPolicy{WindowTokens: 10240, ThresholdPercent: 80, KeepRecentRounds: 1})
 		out, e := b.Prepare(context.Background(), in)
 		if e == nil || len(out.Messages) != 0 {
 			t.Fatal("invalid input accepted")
-		}
-	}
-}
-
-func TestCompressionThresholdInclusive(t *testing.T) {
-	in := compressInput()
-	raw, e := builder(t, counterFunc(testCount)).Prepare(context.Background(), func() Input { v := in; v.Budget.WindowTokens = 30000; return v }())
-	if e != nil {
-		t.Fatal(e)
-	}
-	for _, extra := range []int{0, 1} {
-		in.Budget = Budget{WindowTokens: raw.EstimatedTokens + 1 + extra, OutputTokens: 1}
-		calls := 0
-		b, _ := NewCompressing(counterFunc(testCount), summaryFunc(func(context.Context, []domain.Message) (string, error) { calls++; return "facts", nil }), CompressionPolicy{100, 1})
-		_, e = b.Prepare(context.Background(), in)
-		if e != nil || calls != 1-extra {
-			t.Fatal("threshold not inclusive", calls, e)
 		}
 	}
 }

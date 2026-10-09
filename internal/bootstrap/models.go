@@ -37,9 +37,6 @@ func validateModel(cfg config.Config, doc schema.Model) error {
 	if err != nil {
 		return err
 	}
-	check.Context.WindowTokens, check.Context.OutputTokens = doc.Options.WindowTokens, doc.Options.OutputTokens
-	check.Context.SummaryWindowTokens = doc.Options.WindowTokens
-	check.Context.SummaryOutputTokens = min(check.Context.SummaryOutputTokens, doc.Options.OutputTokens)
 	return check.Validate()
 }
 

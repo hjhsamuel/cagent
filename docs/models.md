@@ -27,11 +27,8 @@ PUT 请求示例（`modelID` 来自 URL，请求体不包含 `id`）：
     { "id": "glm-key-1", "value": "供应商API密钥", "weight": 3 }
   ],
   "config": {
-    "token_encoding": "o200k_base",
-    "max_tokens_field": "max_tokens",
-    "request_timeout": "2m",
     "window_tokens": 32768,
-    "output_tokens": 4096,
+    "request_timeout": "2m",
     "thinking": { "enabled": false }
   }
 }
@@ -39,7 +36,7 @@ PUT 请求示例（`modelID` 来自 URL，请求体不包含 `id`）：
 
 每个 key 必须指定模型内唯一的非空 `id`。`value` 是写入用明文，服务使用当前最高版本 AES 密钥自动加密，仅将密文保存到 MongoDB；新 key 必须提供 value。更新时省略 value 或设为 null，可保留该 ID 的已有密文并修改权重。查询与 PUT 响应中 api_keys 仅包含 `id/version/weight`，不返回 value、ciphertext 或 nonce；不返回 AES 密钥。响应中的 version 为只读信息，PUT 请求不接受此字段，更新时按上面的写入结构构造请求。
 
-PUT 会校验模型参数、完整上下文预算、加密密钥、全部凭据及权重，至少一个 key 权重大于 0；无效配置返回 400，未知字段、多段 JSON 和空请求体返回 400，请求体超限返回 413。目录修改与 AES 轮换在本实例内串行执行，MongoDB 持久化成功后才发布内存配置；数据库失败时保留旧目录。覆盖和删除使用事务比较当前数据库文档与本实例旧快照，并发修改返回 409，需同步配置并重启加载后重试。新增同 ID 文档冲突也返回 409。多实例部署的其他实例须重启加载新配置；查询不直接读取外部修改后的数据库。
+PUT 会校验模型参数、加密密钥、全部凭据及权重，至少一个 key 权重大于 0；无效配置返回 400，未知字段、多段 JSON 和空请求体返回 400，请求体超限返回 413。目录修改与 AES 轮换在本实例内串行执行，MongoDB 持久化成功后才发布内存配置；数据库失败时保留旧目录。覆盖和删除使用事务比较当前数据库文档与本实例旧快照，并发修改返回 409，需同步配置并重启加载后重试。新增同 ID 文档冲突也返回 409。多实例部署的其他实例须重启加载新配置；查询不直接读取外部修改后的数据库。
 
 PUT 是完整替换，未保留的 key 会被删除。供应商 API key 轮换建议使用新 ID 添加新 key，把旧 key 权重设为 0 并保留到相关会话结束。同 ID 提供新 value 会使后续绑定解析使用新凭据；删除 key 或模型会使依赖它的已有会话明确失败。
 
@@ -58,11 +55,8 @@ PUT 是完整替换，未保留的 key 会被删除。供应商 API key 轮换�
     { "id": "glm-key-2", "version": "v2", "ciphertext": "BASE64_CIPHERTEXT", "nonce": "BASE64_NONCE", "weight": 1 }
   ],
   "config": {
-    "token_encoding": "o200k_base",
-    "max_tokens_field": "max_tokens",
-    "request_timeout": "2m",
     "window_tokens": 32768,
-    "output_tokens": 4096,
+    "request_timeout": "2m",
     "thinking": {
       "enabled": true,
       "key": "thinking.type",
@@ -81,18 +75,15 @@ PUT 是完整替换，未保留的 key 会被删除。供应商 API key 轮换�
 | `api_keys[].ciphertext` | Base64 编码的 AES-GCM 认证密文，包含认证标签，不包含 nonce；无明文回退 |
 | `api_keys[].nonce` | 独立 Base64 编码的 12 字节随机 nonce，每次加密重新生成 |
 | `api_keys[].weight` | 非负整数；0 暂停新选择，已有会话仍可使用，至少一个为正；总和不可溢出 int64 |
-| `config.token_encoding` | 显式指定 `cl100k_base` 或 `o200k_base`，需与模型实际能力匹配 |
-| `config.max_tokens_field` | `max_tokens` 或 `max_completion_tokens` |
+| `config.window_tokens` | 必填正整数，填写供应商模型的实际上下文上限；仅用于摘要比例触发，无默认值 |
 | `config.request_timeout` | 正 Go duration，如 `30s`、`2m` |
-| `config.window_tokens` | 模型上下文窗口，覆盖进程环境中的窗口预算 |
-| `config.output_tokens` | 主模型生成输出预算，正数且不超过 int32，覆盖环境中的输出预算 |
 | `config.thinking` | 可选深度思考参数；`enabled=false` 或缺省时不发送 |
 
-创建会话时按 `weight / 总权重` 随机选取 API key，会话只保存主对话的 `ModelID` 和 `APIKeyID`。后续所有主对话和工具轮次均使用这个绑定，服务重启后也不重新抽取。Subagent 每次新调用独立随机抽取模型及加权 API key，恢复时使用分支检查点保存的绑定，不覆盖会话。不会在失败后自动换 key 或重试。权重为 0 的 key 也必须是可解密的有效密文。窗口必须大于输出、工具和安全预留之和；加载后会再次校验完整预算。
+创建会话时按 `weight / 总权重` 随机选取 API key，会话只保存主对话的 `ModelID` 和 `APIKeyID`。后续所有主对话和工具轮次均使用这个绑定，服务重启后也不重新抽取。Subagent 每次新调用独立随机抽取模型及加权 API key，恢复时使用分支检查点保存的绑定，不覆盖会话。不会在失败后自动换 key 或重试。权重为 0 的 key 也必须是可解密的有效密文。
 
 深度思考的 `key` 是供应商要求的 JSON 参数路径，可指定 `thinking.type`、`enable_thinking`、`reasoning_effort` 等；`value` 可以是 JSON 字符串、布尔值、数字或对象。只传递配置值，不按 `provider` 推断参数。路径不能覆盖模型、消息、工具、流控制和输出限额等核心参数。请按供应商实际协议设置。
 
-摘要调用独立随机选择模型和加权 API key，不属于会话主对话。摘要编码和窗口来自所选文档，输出由 `CAGENT_CONTEXT_SUMMARY_OUTPUT_TOKENS` 控制，并受文档输出上限约束。
+摘要调用独立随机选择模型和加权 API key，不属于会话主对话。摘要依据最新 LLM 响应的 prompt_tokens 达到阈值触发，默认阈值为主模型 `config.window_tokens` 的 80%，通过 `CAGENT_CONTEXT_COMPRESSION_THRESHOLD_PERCENT` 调整比例；近期轮数只决定摘要范围。不计算 Token 预算，也不设置输出 Token 限额。
 
 ## 加密密钥环境变量
 
@@ -128,11 +119,11 @@ Invoke-RestMethod -Method Post -Uri 'http://localhost:8080/debug/model-keys/rota
 
 加密密钥轮换保持供应商 API key 不变；若需轮换供应商 API key，先加密新 API key 并更新数组，将旧 key 权重设为 0 停止新会话选用；已有会话继续使用旧绑定。保留旧条目直到相关会话结束，删除后这些会话会明确失败，不随机更换凭据。
 
-旧 `CAGENT_AGENT_MODEL`、`CAGENT_CONTEXT_SUMMARY_MODEL`、`CAGENT_CONTEXT_SUMMARY_TOKEN_ENCODING`、`CAGENT_AGENT_PROVIDER`、`CAGENT_AGENT_BASE_URL`、`CAGENT_AGENT_API_KEY`、`CAGENT_AGENT_TOKEN_ENCODING`、`CAGENT_AGENT_MAX_TOKENS_FIELD`、`CAGENT_AGENT_REQUEST_TIMEOUT` 不再读取。迁移时将对应设置写入模型文档，并加密原明文 API key。
+旧 `CAGENT_AGENT_MODEL`、`CAGENT_CONTEXT_SUMMARY_MODEL`、`CAGENT_CONTEXT_SUMMARY_TOKEN_ENCODING`、`CAGENT_AGENT_PROVIDER`、`CAGENT_AGENT_BASE_URL`、`CAGENT_AGENT_API_KEY`、`CAGENT_AGENT_TOKEN_ENCODING`、`CAGENT_AGENT_MAX_TOKENS_FIELD`、`CAGENT_AGENT_REQUEST_TIMEOUT` 不再读取。迁移时将模型、地址和超时等保留设置写入模型文档，并加密原明文 API key。
 
 ## 结构目录与旧数据迁移
 
-所有 MongoDB 集合名和 BSON 结构集中于 internal/storage/schema。模型统一使用 OpenAI 兼容 Chat Completions，不再维护 protocol 字段；旧文档中的 protocol 字段可删除，读取时会忽略。数据库只保存稳定 ID、密文、nonce、版本标识和权重，具体版本的 AES key 由独立环境变量 `CAGENT_MODEL_ENCRYPTION_KEY_V<正整数>` 提供。server 自动加载当前工作目录的 .env，也可由启动环境注入这些变量；已有环境变量优先。
+所有 MongoDB 集合名和 BSON 结构集中于 internal/storage/schema。模型统一使用 OpenAI 兼容 Chat Completions，上下文不计算 Token 预算，不设置输出 Token 限额。模型文档必须提供 `config.window_tokens`；缺失或非正值会明确报配置错误。模型文档不再维护 protocol、token_encoding、max_tokens_field 和 output_tokens 字段；旧文档中的这些字段可删除，读取时会忽略，HTTP PUT 请求不再接受。数据库只保存稳定 ID、密文、nonce、版本标识和权重，具体版本的 AES key 由独立环境变量 `CAGENT_MODEL_ENCRYPTION_KEY_V<正整数>` 提供。server 自动加载当前工作目录的 .env，也可由启动环境注入这些变量；已有环境变量优先。
 
 旧版将 nonce 拼接在 ciphertext 前的记录须预先迁移为独立字段；当前运行时和 HTTP 轮换拒绝缺失 nonce 的记录。
 

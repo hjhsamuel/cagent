@@ -83,20 +83,17 @@ func (r *sessionModels) selection(ctx context.Context, req agent.Request) (confi
 func (r *sessionModels) build(selected config.SelectedModel, summary bool) (*adk.Runtime, ContextOptions, error) {
 	cfg := r.cfg
 	cfg.Agent = selected.Agent
-	cfg.Context.WindowTokens, cfg.Context.OutputTokens = selected.Options.WindowTokens, selected.Options.OutputTokens
-	cfg.Context.SummaryModel, cfg.Context.SummaryTokenEncoding = "", ""
+	cfg.Context.SummaryModel = ""
 	cfg.SummaryAgent = nil
-	if summary && cfg.Context.CompressionThresholdPercent > 0 {
+	if summary && cfg.Context.CompressionEnabled {
 		// 摘要是独立内部调用，不作为会话主对话绑定。
 		chosen, err := cfg.Models.Select("")
 		if err != nil {
 			return nil, ContextOptions{}, err
 		}
 		cfg.SummaryAgent = &chosen.Agent
-		cfg.Context.SummaryWindowTokens = chosen.Options.WindowTokens
-		cfg.Context.SummaryOutputTokens = min(cfg.Context.SummaryOutputTokens, chosen.Options.OutputTokens)
 	} else {
-		cfg.Context.CompressionThresholdPercent = 0
+		cfg.Context.CompressionEnabled = false
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, ContextOptions{}, err
@@ -121,16 +118,16 @@ func (r *sessionModels) prepare(ctx context.Context, run domain.Run) (agent.Requ
 	if err != nil {
 		return agent.Request{}, err
 	}
-	runtime, opts, err := r.build(selected, true)
+	_, opts, err := r.build(selected, true)
 	if err != nil {
 		return agent.Request{}, err
 	}
 	opts.PreserveUsers = !opts.ArchiveCompleted
 	var engine contextengine.Engine
 	if opts.Compression != nil {
-		engine, err = contextengine.NewCompressing(runtime, opts.Summarizer, *opts.Compression)
+		engine, err = contextengine.NewCompressing(opts.Summarizer, *opts.Compression)
 	} else {
-		engine, err = contextengine.New(runtime)
+		engine = contextengine.New()
 	}
 	if err != nil {
 		return agent.Request{}, err

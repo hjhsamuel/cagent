@@ -15,8 +15,6 @@ type ContextSnapshot struct {
 	// ThroughSequence 是摘要覆盖的连续前缀上界，保存时不得超过历史或倒退。
 	ThroughSequence int64
 	Summary         string
-	// TokenEstimate 仅供诊断，发送模型前必须重新整体计数，不能以此绕过预算。
-	TokenEstimate int
 	// PolicyVersion identifies the trusted policy; incompatible snapshots rebuild
 	// from original history, while compatible validated prefixes may be incremental.
 	PolicyVersion string

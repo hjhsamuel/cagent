@@ -35,7 +35,7 @@ func (r *Runtime) pending(req agent.Request) (pendingCheckpoint, error) {
 	}
 	// 兼容 P8 检查点：从初始上下文和 SDK 工具事件重建实际历史。
 	if len(saved.Contents) == 0 {
-		mapped, e := mapMessages(saved.Messages, r.model.Name(), int32(r.budget.OutputTokens))
+		mapped, e := mapMessages(saved.Messages, r.model.Name())
 		if e != nil {
 			return saved, e
 		}

@@ -18,7 +18,7 @@ func TestModelEnvironmentDoesNotSelectDefaultModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Agent.Model != "" || c.Agent.Provider != "" || c.Agent.BaseURL != "" || c.Agent.APIKey != "" || c.Agent.TokenEncoding != "" || c.Agent.MaxTokensField != "max_tokens" || c.Agent.RequestTimeout != 2*time.Minute {
+	if c.Agent.Model != "" || c.Agent.Provider != "" || c.Agent.BaseURL != "" || c.Agent.APIKey != "" || c.Agent.RequestTimeout != 2*time.Minute {
 		t.Fatal("obsolete model environment settings were loaded")
 	}
 	if c.ModelEncryption.Keys["v1"] != v["CAGENT_MODEL_ENCRYPTION_KEY_V1"] {
@@ -30,7 +30,7 @@ func TestModelEnvironmentDoesNotSelectDefaultModel(t *testing.T) {
 }
 
 func TestOpenAIProgrammaticValidation(t *testing.T) {
-	valid := config.Agent{Provider: "GLM", Model: "arbitrary-model", BaseURL: "https://example.invalid/v1", APIKey: "unit-secret", TokenEncoding: "cl100k_base", MaxTokensField: "max_tokens", RequestTimeout: time.Minute}
+	valid := config.Agent{Provider: "GLM", Model: "arbitrary-model", BaseURL: "https://example.invalid/v1", APIKey: "unit-secret", RequestTimeout: time.Minute}
 	if err := valid.ValidateOpenAI(); err != nil {
 		t.Fatal(err)
 	}
@@ -42,8 +42,6 @@ func TestOpenAIProgrammaticValidation(t *testing.T) {
 		{"agent.base_url", func(a *config.Agent) { a.BaseURL = "https://user:unit-secret@example.invalid" }},
 		{"agent.base_url", func(a *config.Agent) { a.BaseURL = "https://example.invalid/?key=unit-secret" }},
 		{"agent.api_key", func(a *config.Agent) { a.APIKey = " " }},
-		{"agent.token_encoding", func(a *config.Agent) { a.TokenEncoding = "unknown" }},
-		{"agent.max_tokens_field", func(a *config.Agent) { a.MaxTokensField = "unknown" }},
 		{"agent.request_timeout", func(a *config.Agent) { a.RequestTimeout = 0 }},
 	} {
 		a := valid

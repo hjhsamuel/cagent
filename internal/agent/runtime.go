@@ -59,6 +59,8 @@ type Update struct {
 	Message []domain.Part
 	// MessageRole 仅允许 assistant/tool；空值兼容早期 assistant 输出。
 	MessageRole domain.Role
+	// PromptTokens 仅携带 LLM 报告的输入用量，与完整 assistant 消息一起持久化。
+	PromptTokens int32
 	// Tasks 交接已经启动的任务，必须同时携带暂停检查点；应用使用 TrackTask 事务
 	// 保存关联与句柄。这里只登记，不负责观察、续接或再次启动工具。
 	Tasks []domain.Task

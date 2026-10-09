@@ -17,12 +17,11 @@ import (
 	"github.com/hjhsamuel/cagent/internal/adapter/mongodb"
 	"github.com/hjhsamuel/cagent/internal/agent"
 	"github.com/hjhsamuel/cagent/internal/config"
-	"github.com/hjhsamuel/cagent/internal/contextengine"
 	"google.golang.org/adk/v2/model"
 )
 
 func openAIConfig(url string) config.Agent {
-	return config.Agent{Provider: "openai", Model: "dynamic/vendor-model", BaseURL: url, APIKey: "test-secret", TokenEncoding: "o200k_base", MaxTokensField: "max_tokens", RequestTimeout: 2 * time.Second}
+	return config.Agent{Provider: "openai", Model: "dynamic/vendor-model", BaseURL: url, APIKey: "test-secret", RequestTimeout: 2 * time.Second}
 }
 func sse(w http.ResponseWriter, text, finish string) {
 	fmt.Fprintf(w, "data: {\"id\":\"id\",\"choices\":[{\"index\":0,\"delta\":{\"content\":%q},\"finish_reason\":%q}]}\n\n", text, finish)
@@ -31,9 +30,9 @@ func sse(w http.ResponseWriter, text, finish string) {
 	}
 }
 
-// 真实 HTTP 边界验证动态 URL/模型/密钥、两个输出限额字段、流式聚合及实际 BPE。
-func TestOpenAIWireStreamingAndCounting(t *testing.T) {
-	for _, field := range []string{"max_tokens", "max_completion_tokens"} {
+// 真实 HTTP 边界验证动态 URL/模型/密钥、不发送输出限额字段、长输入及流式聚合。
+func TestOpenAIWireStreamingWithoutTokenLimits(t *testing.T) {
+	for _, field := range []string{"plain", "long input"} {
 		t.Run(field, func(t *testing.T) {
 			var calls atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -45,12 +44,15 @@ func TestOpenAIWireStreamingAndCounting(t *testing.T) {
 				if e := json.NewDecoder(r.Body).Decode(&body); e != nil {
 					t.Error(e)
 				}
-				if body["model"] != "dynamic/vendor-model" || body[field] != float64(256) || body["stream"] != true {
+				if body["model"] != "dynamic/vendor-model" || body["max_tokens"] != nil || body["max_completion_tokens"] != nil || body["stream"] != true {
 					t.Error("dynamic parameters not sent")
 				}
 				messages := body["messages"].([]any)
 				if len(messages) != 3 || messages[0].(map[string]any)["role"] != "system" {
 					t.Error("request mapping mismatch")
+				}
+				if field == "long input" && messages[2].(map[string]any)["content"] != strings.Repeat("history ", 10000) {
+					t.Error("long input was trimmed")
 				}
 				w.Header().Set("Content-Type", "text/event-stream")
 				sse(w, "hello ", "")
@@ -59,16 +61,14 @@ func TestOpenAIWireStreamingAndCounting(t *testing.T) {
 			}))
 			defer server.Close()
 			cfg := openAIConfig(server.URL + "/custom/v1")
-			cfg.MaxTokensField = field
 			m, e := NewOpenAI(cfg, nil)
 			if e != nil {
 				t.Fatal(e)
 			}
-			runtime := runtimeFor(t, m, m)
+			runtime := runtimeFor(t, m)
 			req := request("user")
-			n, e := runtime.Count(context.Background(), req.Messages)
-			if e != nil || n <= 0 {
-				t.Fatal("invalid BPE count", e)
+			if field == "long input" {
+				req.Messages[len(req.Messages)-1].Parts[0].Text = strings.Repeat("history ", 10000)
 			}
 			var updates []agent.Update
 			if e = runtime.Execute(context.Background(), req, func(_ context.Context, u agent.Update) error { updates = append(updates, u); return nil }); e != nil {
@@ -78,7 +78,7 @@ func TestOpenAIWireStreamingAndCounting(t *testing.T) {
 				t.Fatal("bad streamed completion")
 			}
 			var data OutputData
-			if e = json.Unmarshal(updates[2].Data, &data); e != nil || data.PromptTokens != 20 {
+			if e = json.Unmarshal(updates[2].Data, &data); e != nil || data.PromptTokens != 20 || updates[2].PromptTokens != 20 {
 				t.Fatal("lost usage", e)
 			}
 		})
@@ -130,7 +130,7 @@ func TestOpenAIHTTPFailuresAreBoundedAndSafe(t *testing.T) {
 			if mode == "cancel" {
 				time.AfterFunc(20*time.Millisecond, cancel)
 			}
-			mapped, e := mapMessages(request("u").Messages, m.Name(), 256)
+			mapped, e := mapMessages(request("u").Messages, m.Name())
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -171,7 +171,7 @@ func TestOpenAIRedirectAndNonStreaming(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	mapped, _ := mapMessages(request("u").Messages, m.Name(), 12)
+	mapped, _ := mapMessages(request("u").Messages, m.Name())
 	for _, e := range m.GenerateContent(context.Background(), mapped, true) {
 		if e == nil {
 			t.Fatal("redirect followed")
@@ -236,24 +236,17 @@ func TestRealOpenAISmoke(t *testing.T) {
 		t.Fatal(e)
 	}
 	cfg.Agent = selected.Agent
-	cfg.Context.WindowTokens = selected.Options.WindowTokens
-	cfg.Context.OutputTokens = selected.Options.OutputTokens
 	m, e := NewOpenAI(cfg.Agent, nil)
 	if e != nil {
 		t.Fatal(e)
 	}
-	configuredBudget := contextengine.Budget{WindowTokens: cfg.Context.WindowTokens, OutputTokens: cfg.Context.OutputTokens, ToolTokens: cfg.Context.ToolTokens, SafetyTokens: cfg.Context.SafetyTokens}
-	runtime, e := New(m, m, configuredBudget)
+	runtime, e := New(m)
 	if e != nil {
 		t.Fatal(e)
 	}
 	req := request("smoke")
 	req.Messages = req.Messages[len(req.Messages)-1:]
 	req.Messages[0].Parts[0].Text = "Reply with the single word OK."
-	estimate, e := runtime.Count(context.Background(), req.Messages)
-	if e != nil {
-		t.Fatal(e)
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Agent.RequestTimeout)
 	defer cancel()
 	completed := false
@@ -264,8 +257,8 @@ func TestRealOpenAISmoke(t *testing.T) {
 			if e := json.Unmarshal(u.Data, &data); e != nil {
 				return e
 			}
-			if data.PromptTokens <= 0 || int(data.PromptTokens) > estimate+configuredBudget.SafetyTokens {
-				return fmt.Errorf("provider usage does not fit configured token estimate and safety reserve")
+			if data.PromptTokens <= 0 {
+				return fmt.Errorf("provider usage is missing")
 			}
 		}
 		return nil

@@ -41,7 +41,7 @@ func TestRealRunnerImmediateAndDynamicTask(t *testing.T) {
 						t.Error("missing declarations")
 					}
 					if n == 1 {
-						yield(&model.LLMResponse{Content: &genai.Content{Role: "model", Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "original", Name: "echo", Args: map[string]any{}}}}}}, nil)
+						yield(&model.LLMResponse{Content: &genai.Content{Role: "model", Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "original", Name: "echo", Args: map[string]any{}}}}}, UsageMetadata: &genai.GenerateContentResponseUsageMetadata{PromptTokenCount: 8192}}, nil)
 					} else {
 						if len(r.Contents) != 4 || r.Contents[3].Parts[0].FunctionResponse == nil {
 							t.Error("lost tool history")
@@ -50,12 +50,15 @@ func TestRealRunnerImmediateAndDynamicTask(t *testing.T) {
 					}
 				}
 			})
-			runtime, e := New(m, countFunc(fixedCounter), budget(), ToolOptions{Registry: catalog, MaxModelCalls: 4})
+			runtime, e := New(m, ToolOptions{Registry: catalog, MaxModelCalls: 4})
 			if e != nil {
 				t.Fatal(e)
 			}
 			var updates []agent.Update
 			e = runtime.Execute(context.Background(), req, func(_ context.Context, u agent.Update) error { updates = append(updates, u); return nil })
+			if len(updates) == 0 || updates[0].PromptTokens != 8192 {
+				t.Fatal("tool call lost reported usage", updates)
+			}
 			if task {
 				if !errors.Is(e, agent.ErrWaiting) || models.Load() != 1 {
 					t.Fatal("not paused", e, models.Load())
@@ -101,7 +104,7 @@ func TestToolErrorStopsSDKLoop(t *testing.T) {
 			yield(&model.LLMResponse{Content: &genai.Content{Role: "model", Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "id", Name: "fail", Args: map[string]any{}}}}}}, nil)
 		}
 	})
-	runtime, _ := New(m, countFunc(fixedCounter), budget(), ToolOptions{Registry: catalog, MaxModelCalls: 3})
+	runtime, _ := New(m, ToolOptions{Registry: catalog, MaxModelCalls: 3})
 	e := runtime.Execute(context.Background(), req, func(context.Context, agent.Update) error { return nil })
 	if !errors.Is(e, failure) || !errors.Is(e, agent.ErrUncertain) || calls != 1 {
 		t.Fatal(e, calls)

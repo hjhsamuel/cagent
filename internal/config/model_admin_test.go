@@ -12,7 +12,7 @@ import (
 
 func adminInput() ModelInput {
 	secret := "supplier-secret"
-	return ModelInput{Model: "vendor-model", Provider: "GLM", BaseURL: "https://example.invalid/v1", APIKeys: []ModelKeyInput{{ID: "key-1", Value: &secret, Weight: 1}}, Options: schema.ModelConfig{TokenEncoding: "o200k_base", MaxTokensField: "max_tokens", RequestTimeout: "2s", WindowTokens: 8192, OutputTokens: 2048, Thinking: schema.Thinking{Enabled: true, Key: "thinking", Value: map[string]any{"type": "enabled"}}}}
+	return ModelInput{Model: "vendor-model", Provider: "GLM", BaseURL: "https://example.invalid/v1", APIKeys: []ModelKeyInput{{ID: "key-1", Value: &secret, Weight: 1}}, Options: schema.ModelConfig{WindowTokens: 32768, RequestTimeout: "2s", Thinking: schema.Thinking{Enabled: true, Key: "thinking", Value: map[string]any{"type": "enabled"}}}}
 }
 
 func TestModelAdministrationPersistenceAndBindings(t *testing.T) {

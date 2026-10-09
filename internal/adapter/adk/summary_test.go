@@ -3,20 +3,17 @@ package adk
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
-
-	"github.com/hjhsamuel/cagent/internal/contextengine"
 )
 
-// 使用真实 OpenAI SDK 和 BPE 验证摘要模型选择、非流式无工具请求、输出限额，
-// 同时证明输入超限不发网络请求，截断和服务错误不会伪装为完整摘要或自动重试。
-func TestSummaryModelHTTPBudgetAndFailure(t *testing.T) {
-	for _, kind := range []string{"ok", "oversize", "truncated", "server-error", "empty", "cancel"} {
+// 使用真实 OpenAI SDK 验证摘要模型选择、无 Token 限额及失败不重试。
+func TestSummaryModelHTTPWithoutLimitsAndFailure(t *testing.T) {
+	for _, kind := range []string{"ok", "long input", "truncated", "server-error", "empty", "cancel"} {
 		t.Run(kind, func(t *testing.T) {
 			var calls atomic.Int32
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -25,7 +22,7 @@ func TestSummaryModelHTTPBudgetAndFailure(t *testing.T) {
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Error(err)
 				}
-				if body["model"] != "summary-only" || body["tools"] != nil || body["stream"] == true || body["max_tokens"] != float64(100) {
+				if body["model"] != "summary-only" || body["tools"] != nil || body["stream"] == true || body["max_tokens"] != nil || body["max_completion_tokens"] != nil {
 					t.Errorf("wrong request %+v", body)
 				}
 				messages := body["messages"].([]any)
@@ -53,11 +50,7 @@ func TestSummaryModelHTTPBudgetAndFailure(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			b := contextengine.Budget{WindowTokens: 4096, OutputTokens: 100, SafetyTokens: 64}
-			if kind == "oversize" {
-				b.WindowTokens = 165
-			}
-			s, e := NewSummaryModel(llm, llm, b)
+			s, e := NewSummaryModel(llm)
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -66,8 +59,12 @@ func TestSummaryModelHTTPBudgetAndFailure(t *testing.T) {
 			if kind == "cancel" {
 				cancel()
 			}
-			out, e := s.Summarize(ctx, request("original user requirement").Messages)
-			if kind == "ok" {
+			source := request("original user requirement").Messages
+			if kind == "long input" {
+				source[len(source)-1].Parts[0].Text = strings.Repeat("history ", 10000)
+			}
+			out, e := s.Summarize(ctx, source)
+			if kind == "ok" || kind == "long input" {
 				if e != nil || out != "摘要事实" {
 					t.Fatal(out, e)
 				}
@@ -75,14 +72,11 @@ func TestSummaryModelHTTPBudgetAndFailure(t *testing.T) {
 				t.Fatal("unsafe summary", out, e)
 			}
 			want := int32(1)
-			if kind == "oversize" || kind == "cancel" {
+			if kind == "cancel" {
 				want = 0
 			}
 			if calls.Load() != want {
 				t.Fatal("unexpected requests", calls.Load())
-			}
-			if kind == "oversize" && !errors.Is(e, contextengine.ErrBudgetExceeded) {
-				t.Fatal(e)
 			}
 		})
 	}

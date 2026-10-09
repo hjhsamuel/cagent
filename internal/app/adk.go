@@ -14,9 +14,9 @@ import (
 	"github.com/hjhsamuel/cagent/internal/observability"
 )
 
-// NewOpenAIService 将动态模型配置、ADK、P5 预算与 P4 生命周期连接起来，不启动 HTTP。
+// NewOpenAIService 将动态模型配置、ADK、上下文准备与 P4 生命周期连接起来，不启动 HTTP。
 // 模型参数为本实例的配置快照；更换配置需创建新实例，不能并发修改运行中配置。
-// lifecycle 只提供租约/轮询参数，禁止覆盖已装配的预算与恢复回调。
+// lifecycle 只提供租约/轮询参数，禁止覆盖已装配的上下文准备与恢复回调。
 func NewOpenAIService(parent context.Context, db *mongodb.Database, cfg config.Config, system []domain.Part, lifecycle Options, tools ...adk.ToolOptions) (*Application, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -52,9 +52,9 @@ func NewADKService(parent context.Context, db *mongodb.Database, runtime *adk.Ru
 	var engine contextengine.Engine
 	var err error
 	if opts.Compression != nil {
-		engine, err = contextengine.NewCompressing(runtime, opts.Summarizer, *opts.Compression)
+		engine, err = contextengine.NewCompressing(opts.Summarizer, *opts.Compression)
 	} else {
-		engine, err = contextengine.New(runtime)
+		engine = contextengine.New()
 	}
 	if err != nil {
 		return nil, err
@@ -83,22 +83,24 @@ func NewADKService(parent context.Context, db *mongodb.Database, runtime *adk.Ru
 }
 
 func buildOpenAIRuntime(cfg config.Config, system []domain.Part, gate *observability.Gate, tools ...adk.ToolOptions) (*adk.Runtime, ContextOptions, error) {
+	if cfg.Context.CompressionEnabled && cfg.Agent.WindowTokens <= 0 {
+		return nil, ContextOptions{}, invalid("model.config.window_tokens")
+	}
 	llm, err := adk.NewOpenAI(cfg.Agent, nil)
 	if err != nil {
 		return nil, ContextOptions{}, err
 	}
 	llm.SetCapacity(gate)
-	budget := contextengine.Budget{WindowTokens: cfg.Context.WindowTokens, OutputTokens: cfg.Context.OutputTokens, ToolTokens: cfg.Context.ToolTokens, SafetyTokens: cfg.Context.SafetyTokens}
-	runtime, err := adk.New(llm, llm, budget, tools...)
+	runtime, err := adk.New(llm, tools...)
 	if err != nil {
 		return nil, ContextOptions{}, err
 	}
-	opts := ContextOptions{System: system, Budget: budget, PolicyVersion: cfg.Context.PolicyVersion}
-	opts.ArchiveCompleted = cfg.Context.ArchiveCompleted && cfg.Context.CompressionThresholdPercent > 0
+	opts := ContextOptions{System: system, PolicyVersion: cfg.Context.PolicyVersion}
+	opts.ArchiveCompleted = cfg.Context.ArchiveCompleted && cfg.Context.CompressionEnabled
 	if opts.ArchiveCompleted {
 		opts.PolicyVersion += "/archive-v1"
 	}
-	if cfg.Context.CompressionThresholdPercent > 0 {
+	if cfg.Context.CompressionEnabled {
 		summaryCfg := cfg.Agent
 		if cfg.SummaryAgent != nil {
 			summaryCfg = *cfg.SummaryAgent
@@ -106,19 +108,16 @@ func buildOpenAIRuntime(cfg config.Config, system []domain.Part, gate *observabi
 		if cfg.Context.SummaryModel != "" {
 			summaryCfg.Model = cfg.Context.SummaryModel
 		}
-		if cfg.Context.SummaryTokenEncoding != "" {
-			summaryCfg.TokenEncoding = cfg.Context.SummaryTokenEncoding
-		}
 		summaryLLM, e := adk.NewOpenAI(summaryCfg, nil)
 		if e != nil {
 			return nil, ContextOptions{}, e
 		}
 		summaryLLM.SetCapacity(gate)
-		opts.Summarizer, e = adk.NewSummaryModel(summaryLLM, summaryLLM, contextengine.Budget{WindowTokens: cfg.Context.SummaryWindowTokens, OutputTokens: cfg.Context.SummaryOutputTokens, SafetyTokens: cfg.Context.SafetyTokens})
+		opts.Summarizer, e = adk.NewSummaryModel(summaryLLM)
 		if e != nil {
 			return nil, ContextOptions{}, e
 		}
-		opts.Compression = &contextengine.CompressionPolicy{ThresholdPercent: cfg.Context.CompressionThresholdPercent, KeepRecentRounds: cfg.Context.KeepRecentRounds}
+		opts.Compression = &contextengine.CompressionPolicy{WindowTokens: cfg.Agent.WindowTokens, ThresholdPercent: cfg.Context.CompressionThresholdPercent, KeepRecentRounds: cfg.Context.KeepRecentRounds}
 	}
 	return runtime, opts, nil
 }

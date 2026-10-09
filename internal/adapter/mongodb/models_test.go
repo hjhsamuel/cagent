@@ -12,7 +12,7 @@ import (
 )
 
 func TestModelBSONPreservesThinkingObject(t *testing.T) {
-	raw, err := bson.Marshal(bson.M{"_id": "model", "provider": "GLM", "api_keys": bson.A{bson.M{"version": "v1", "ciphertext": "encrypted", "nonce": "separate-nonce", "weight": int64(3)}}, "config": bson.M{"window_tokens": 32000, "thinking": bson.M{"enabled": true, "key": "thinking", "value": bson.M{"type": "enabled"}}}})
+	raw, err := bson.Marshal(bson.M{"_id": "model", "provider": "GLM", "api_keys": bson.A{bson.M{"version": "v1", "ciphertext": "encrypted", "nonce": "separate-nonce", "weight": int64(3)}}, "config": bson.M{"window_tokens": 32000, "token_encoding": "legacy", "max_tokens_field": "legacy", "output_tokens": -1, "thinking": bson.M{"enabled": true, "key": "thinking", "value": bson.M{"type": "enabled"}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,6 +26,16 @@ func TestModelBSONPreservesThinkingObject(t *testing.T) {
 	}
 	if d.ID != "model" || d.Provider != "GLM" || d.APIKeys[0].Weight != 3 || d.APIKeys[0].Nonce != "separate-nonce" || d.Options.WindowTokens != 32000 {
 		t.Fatal("model fields lost")
+	}
+	raw, err = bson.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := bson.Raw(raw).Lookup("config").Document()
+	for _, removed := range []string{"token_encoding", "max_tokens_field", "output_tokens"} {
+		if options.Lookup(removed).Type != 0 {
+			t.Fatalf("removed model option %s was persisted", removed)
+		}
 	}
 }
 
@@ -54,7 +64,7 @@ func TestGetModelFromMongoDB(t *testing.T) {
 func TestWriteModelSnapshotPrecondition(t *testing.T) {
 	db, _ := testDatabase(t)
 	ctx := context.Background()
-	doc := schema.Model{ID: "managed", Model: "original", Provider: "GLM", BaseURL: "https://example.invalid/v1", APIKeys: []schema.EncryptedKey{{ID: "key", Version: "v1", Ciphertext: "encrypted", Nonce: "nonce", Weight: 1}}, Options: schema.ModelConfig{Thinking: schema.Thinking{Enabled: true, Key: "thinking", Value: map[string]any{"z": true, "a": "enabled"}}}}
+	doc := schema.Model{ID: "managed", Model: "original", Provider: "GLM", BaseURL: "https://example.invalid/v1", APIKeys: []schema.EncryptedKey{{ID: "key", Version: "v1", Ciphertext: "encrypted", Nonce: "nonce", Weight: 1}}, Options: schema.ModelConfig{WindowTokens: 32768, Thinking: schema.Thinking{Enabled: true, Key: "thinking", Value: map[string]any{"z": true, "a": "enabled"}}}}
 	if err := db.WriteModel(ctx, nil, &doc); err != nil {
 		t.Fatal(err)
 	}

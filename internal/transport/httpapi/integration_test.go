@@ -49,11 +49,11 @@ func TestHTTPADKDatabaseLifecycle(t *testing.T) {
 	defer provider.Close()
 	cfg := config.Defaults()
 	cfg.MongoDB.URI = dbCfg.URI
+	cfg.Agent.WindowTokens = 32768
 	cfg.Agent.Provider = "openai"
 	cfg.Agent.Model = "test-model"
 	cfg.Agent.BaseURL = provider.URL
 	cfg.Agent.APIKey = "test-key"
-	cfg.Agent.TokenEncoding = "o200k_base"
 	application, err := app.NewOpenAIService(context.Background(), db, cfg, nil, app.Options{LeaseDuration: 3 * time.Second, PollInterval: 50 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)

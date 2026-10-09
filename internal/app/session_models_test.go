@@ -30,7 +30,7 @@ func sessionCatalog(t *testing.T, url string) *config.ModelCatalog {
 	}
 	docs := []schema.Model{}
 	for _, id := range []string{"first", "second"} {
-		doc := schema.Model{ID: id, Model: "vendor-" + id, Provider: "GLM", BaseURL: url, Options: schema.ModelConfig{TokenEncoding: "o200k_base", MaxTokensField: "max_tokens", RequestTimeout: "2s", WindowTokens: 8192, OutputTokens: 2048}}
+		doc := schema.Model{ID: id, Model: "vendor-" + id, Provider: "GLM", BaseURL: url, Options: schema.ModelConfig{WindowTokens: 32768, RequestTimeout: "2s"}}
 		for i := 0; i < 2; i++ {
 			key, err := ring.Encrypt(fmt.Sprintf("secret-%s-%d", id, i), int64(i+1))
 			if err != nil {
@@ -45,6 +45,42 @@ func sessionCatalog(t *testing.T, url string) *config.ModelCatalog {
 		t.Fatal(err)
 	}
 	return catalog
+}
+
+func TestSessionModelSummaryWithoutTokenLimits(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if body["max_tokens"] != nil || body["max_completion_tokens"] != nil {
+			t.Error("summary sent a token limit")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"summary"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+	cfg := config.Defaults()
+	cfg.MongoDB.URI = "mongodb://localhost:27017"
+	cfg.Models = sessionCatalog(t, server.URL)
+	selected, err := cfg.Models.Select("first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &sessionModels{cfg: cfg, gate: observability.NewGate(cfg.Capacity.Models, "model")}
+	// 摘要模型独立抽取，触发比例必须仍使用已绑定主模型的上限。
+	selected.Agent.WindowTokens = 64000
+	_, opts, err := r.build(selected, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.Compression == nil || opts.Compression.WindowTokens != 64000 || opts.Compression.ThresholdPercent != 80 {
+		t.Fatal("summary trigger did not use the main model window", opts.Compression)
+	}
+	text, err := opts.Summarizer.Summarize(context.Background(), []domain.Message{{Role: domain.RoleUser, Parts: []domain.Part{{Kind: domain.PartText, Text: "history"}}}})
+	if err != nil || text != "summary" {
+		t.Fatal("summary failed without token limits", err)
+	}
 }
 
 func TestSessionModelPersistsAcrossTurnsAndRestart(t *testing.T) {
@@ -66,7 +102,7 @@ func TestSessionModelPersistsAcrossTurnsAndRestart(t *testing.T) {
 	defer server.Close()
 	cfg := config.Defaults()
 	cfg.MongoDB.URI = dbCfg.URI
-	cfg.Context.CompressionThresholdPercent = 0
+	cfg.Context.CompressionEnabled = false
 	cfg.Models = sessionCatalog(t, server.URL)
 	opts := Options{LeaseDuration: 3 * time.Second, PollInterval: 50 * time.Millisecond}
 	create := func() *Application {
@@ -194,7 +230,7 @@ func TestSubagentHTTPCallsAndCheckpointRecovery(t *testing.T) {
 	defer server.Close()
 	cfg := config.Defaults()
 	cfg.MongoDB.URI = "mongodb://localhost:27017"
-	cfg.Context.CompressionThresholdPercent = 0
+	cfg.Context.CompressionEnabled = false
 	cfg.Models = sessionCatalog(t, server.URL)
 	r := &sessionModels{parent: context.Background(), cfg: cfg, gate: observability.NewGate(cfg.Capacity.Models)}
 	seen := map[string]bool{}

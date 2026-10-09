@@ -56,8 +56,10 @@ type MongoDB struct {
 // Agent 保存模型客户端的启动快照，禁止整体打印。
 // 环境只选择 Model 文档 ID；装配后 Model 为供应商模型名，Provider 为展示分类。
 type Agent struct {
-	Name     string
-	Provider string
+	// WindowTokens 记录主模型上下文上限，仅供摘要比例触发，不限制请求。
+	WindowTokens int64
+	Name         string
+	Provider     string
 	// Keys 是解密后的只读加权密钥池，仅用于模型请求。
 	Keys     *KeyPool
 	Thinking *Thinking
@@ -65,11 +67,7 @@ type Agent struct {
 	// BaseURL 为完整 API 前缀（如 https://host/v1），不从模型名推断地址。
 	BaseURL string
 	// APIKey 仅交给模型客户端，禁止日志打印整个 Agent/Config 或写入检查点。
-	APIKey string
-	// TokenEncoding 必须显式匹配实际模型，当前支持 cl100k_base/o200k_base。
-	TokenEncoding string
-	// MaxTokensField 适配兼容端的输出限额字段，不按任意模型名称猜测。
-	MaxTokensField string
+	APIKey         string
 	RequestTimeout time.Duration
 }
 
@@ -83,29 +81,19 @@ type Tasks struct {
 	ReconnectBackoff time.Duration
 }
 
-// Context 定义模型窗口与预留预算；窗口和输出从 MongoDB 模型加载，工具与安全预留可为零。
-// 扣除全部预留后至少留一个输入 Token；实际计数与模型窗口匹配由模型适配器负责。
+// Context 定义基于模型报告用量的摘要策略，不计算 Token 预算。
 type Context struct {
 	// ArchiveCompleted permits complete terminal rounds to be represented by a
 	// derived summary. Original persistent messages are retained. Default is false.
 	ArchiveCompleted bool
-	// CompressionThresholdPercent 为 0 时禁用压缩，1–100 表示输入预算触发百分比。
+	// CompressionEnabled 开启依据 LLM 报告的 prompt_tokens 生成摘要。
+	CompressionEnabled bool
+	// CompressionThresholdPercent 是输入用量占主模型上下文上限的摘要触发比例。
 	CompressionThresholdPercent int
 	// KeepRecentRounds 包含当前用户轮次；用户原文、工具消息和当前 Run 永远保留。
 	KeepRecentRounds int
 	// SummaryModel 加载前为 MongoDB 文档 ID，空值沿用主模型；加载后为供应商模型名。
-	SummaryModel         string
-	SummaryTokenEncoding string
-	SummaryWindowTokens  int
-	SummaryOutputTokens  int
-	// WindowTokens 是模型上下文总窗口；默认值不代表所选模型的真实能力。
-	WindowTokens int
-	// OutputTokens 是本次生成输出预留，必须为正。
-	OutputTokens int
-	// ToolTokens 为工具定义等额外输入预留，可显式设为零。
-	ToolTokens int
-	// SafetyTokens 是计数偏差的安全余量，可显式设为零。
-	SafetyTokens int
+	SummaryModel string
 	// PolicyVersion 标识上下文策略；压缩策略升级时从原始历史重建不兼容摘要。
 	// 修改模型、提示词或保留规则时应同时变更版本，避免继续使用旧策略内容。
 	PolicyVersion string
@@ -113,16 +101,15 @@ type Context struct {
 
 // Defaults 返回全新默认值，不访问进程环境，也不保证配置已经可以使用。
 // MongoDB URI 必须显式设置；生产启动加载模型目录，创建会话时确定模型。
-// Token 默认值只是初始预算，部署时必须根据所选模型调整，不代表任何模型的能力。
 func Defaults() Config {
 	return Config{
 		Capacity:    Capacity{Runs: 64, Models: 16, Observations: 32},
 		Logging:     Logging{Level: "info", Path: "/app/logs/cagent.log", Size: 50, Rolls: 3},
 		HTTP:        HTTP{Login: Login{TokenTTL: time.Hour}, MaxSubscriptions: 256, Address: "127.0.0.1:8080", SSEHeartbeat: 15 * time.Second, ShutdownGrace: 30 * time.Second, WriteTimeout: 10 * time.Second, MaxBodyBytes: 1 << 20},
 		MongoDB:     MongoDB{Database: "cagent"},
-		Agent:       Agent{Name: "cagent", MaxTokensField: "max_tokens", RequestTimeout: 2 * time.Minute},
+		Agent:       Agent{Name: "cagent", RequestTimeout: 2 * time.Minute},
 		Tasks:       Tasks{PollInterval: 2 * time.Second, ObservationTimeout: 30 * time.Second, ReconnectBackoff: time.Second},
 		Maintenance: Maintenance{Workers: 32, CancelGrace: 5 * time.Minute, DetachedGrace: 24 * time.Hour, OutageGrace: 30 * time.Minute, InteractionGrace: 24 * time.Hour, MaxBackoff: 5 * time.Minute},
-		Context:     Context{WindowTokens: 8192, OutputTokens: 2048, ToolTokens: 1024, SafetyTokens: 512, PolicyVersion: "v1", CompressionThresholdPercent: 80, KeepRecentRounds: 2, SummaryWindowTokens: 8192, SummaryOutputTokens: 512},
+		Context:     Context{PolicyVersion: "v1", CompressionEnabled: true, CompressionThresholdPercent: 80, KeepRecentRounds: 2},
 	}
 }

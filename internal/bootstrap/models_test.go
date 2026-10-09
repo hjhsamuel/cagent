@@ -47,7 +47,7 @@ func modelFixture(t *testing.T) (config.Config, *config.Keyring, fakeModels) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc := schema.Model{ID: "main", Model: "vendor-model", Provider: "GLM", BaseURL: "https://example.invalid/v1", APIKeys: []schema.EncryptedKey{key}, Options: schema.ModelConfig{TokenEncoding: "o200k_base", MaxTokensField: "max_completion_tokens", RequestTimeout: "30s", WindowTokens: 32000, OutputTokens: 4096, Thinking: schema.Thinking{Enabled: true, Key: "thinking.type", Value: "enabled"}}}
+	doc := schema.Model{ID: "main", Model: "vendor-model", Provider: "GLM", BaseURL: "https://example.invalid/v1", APIKeys: []schema.EncryptedKey{key}, Options: schema.ModelConfig{WindowTokens: 32768, RequestTimeout: "30s", Thinking: schema.Thinking{Enabled: true, Key: "thinking.type", Value: "enabled"}}}
 	return c, ring, fakeModels{"main": doc}
 }
 
@@ -69,6 +69,7 @@ func TestMongoModelCatalogHasNoDefault(t *testing.T) {
 	if err != nil || selected.Agent.Model != "other-model" || selected.Agent.Provider != "DeepSeek" {
 		t.Fatal("model directory not loaded", err)
 	}
+
 }
 
 func TestMongoModelCatalogAllowsEmptyUntilUse(t *testing.T) {
@@ -92,19 +93,21 @@ func TestMongoModelCatalogAllowsEmptyUntilUse(t *testing.T) {
 }
 
 func TestMongoModelCatalogFailsClosed(t *testing.T) {
-	for _, mode := range []string{"budget", "timeout", "thinking"} {
+	for _, mode := range []string{"timeout", "thinking", "missing_window", "negative_window"} {
 		t.Run(mode, func(t *testing.T) {
 			c, ring, docs := modelFixture(t)
 			d := docs["main"]
 			switch mode {
+			case "missing_window":
+				d.Options.WindowTokens = 0
+			case "negative_window":
+				d.Options.WindowTokens = -1
 			case "bad_ciphertext":
 				d.APIKeys[0].Ciphertext = "bad"
 			case "missing_nonce":
 				d.APIKeys[0].Nonce = ""
 			case "unknown_version":
 				d.APIKeys[0].Version = "missing"
-			case "budget":
-				d.Options.WindowTokens = 5000
 			case "timeout":
 				d.Options.RequestTimeout = "0s"
 			case "thinking":
@@ -119,7 +122,7 @@ func TestMongoModelCatalogFailsClosed(t *testing.T) {
 	}
 }
 
-func TestModelManagementValidatesFullBudgetAndPublishes(t *testing.T) {
+func TestModelManagementValidatesAndPublishes(t *testing.T) {
 	cfg, ring, docs := modelFixture(t)
 	loaded, err := loadModels(context.Background(), docs, cfg, ring)
 	if err != nil {
@@ -128,15 +131,14 @@ func TestModelManagementValidatesFullBudgetAndPublishes(t *testing.T) {
 	m := modelManagement{cfg: loaded, db: docs}
 	doc := docs["main"]
 	input := config.ModelInput{Model: "updated-vendor", Provider: doc.Provider, BaseURL: doc.BaseURL, Options: doc.Options, APIKeys: []config.ModelKeyInput{{ID: config.StoredKeyID(doc.APIKeys[0]), Weight: 1}}}
-	// Valid metadata but insufficient room after tool/safety reservations.
-	input.Options.WindowTokens = 5000
+	input.Options.RequestTimeout = "0s"
 	if _, err := m.Put(context.Background(), "main", input); !errors.Is(err, apperrors.ErrInvalidArgument) {
-		t.Fatal("insufficient budget accepted", err)
+		t.Fatal("invalid timeout accepted", err)
 	}
 	if docs["main"].Model != doc.Model {
-		t.Fatal("invalid budget persisted")
+		t.Fatal("invalid configuration persisted")
 	}
-	input.Options.WindowTokens = doc.Options.WindowTokens
+	input.Options.RequestTimeout = doc.Options.RequestTimeout
 	if _, err := m.Put(context.Background(), "main", input); err != nil {
 		t.Fatal(err)
 	}

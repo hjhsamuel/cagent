@@ -34,8 +34,8 @@ func TestWeightedKeysAndThinkingOnBothWirePaths(t *testing.T) {
 					return
 				}
 				thinking, ok := body["thinking"].(map[string]any)
-				if !ok || thinking["type"] != "enabled" || body["max_tokens"] != float64(16) || body["model"] != "dynamic/vendor-model" {
-					t.Error("configured thinking or model limits not sent")
+				if !ok || thinking["type"] != "enabled" || body["max_tokens"] != nil || body["max_completion_tokens"] != nil || body["model"] != "dynamic/vendor-model" {
+					t.Error("thinking or model mismatch, or unexpected token limits")
 				}
 				if stream {
 					w.Header().Set("Content-Type", "text/event-stream")
@@ -70,7 +70,7 @@ func TestWeightedKeysAndThinkingOnBothWirePaths(t *testing.T) {
 			}
 			cfg.Thinking.Value = "caller-mutation"
 			for range 80 {
-				req := &model.LLMRequest{Model: llm.Name(), Contents: []*genai.Content{genai.NewContentFromText("hello", "user")}, Config: &genai.GenerateContentConfig{MaxOutputTokens: 16}}
+				req := &model.LLMRequest{Model: llm.Name(), Contents: []*genai.Content{genai.NewContentFromText("hello", "user")}, Config: &genai.GenerateContentConfig{}}
 				for _, err := range llm.GenerateContent(context.Background(), req, stream) {
 					if err != nil {
 						t.Fatal(err)

@@ -56,10 +56,10 @@ func TestDefaultsAndRequiredDeploymentSettings(t *testing.T) {
 		Logging:     config.Logging{Level: "info", Path: "/app/logs/cagent.log", Size: 50, Rolls: 3},
 		HTTP:        config.HTTP{Login: config.Login{TokenTTL: time.Hour}, MaxSubscriptions: 256, Address: "127.0.0.1:8080", SSEHeartbeat: 15 * time.Second, ShutdownGrace: 30 * time.Second, WriteTimeout: 10 * time.Second, MaxBodyBytes: 1 << 20},
 		MongoDB:     config.MongoDB{Database: "cagent"},
-		Agent:       config.Agent{Name: "cagent", MaxTokensField: "max_tokens", RequestTimeout: 2 * time.Minute},
+		Agent:       config.Agent{Name: "cagent", RequestTimeout: 2 * time.Minute},
 		Tasks:       config.Tasks{PollInterval: 2 * time.Second, ObservationTimeout: 30 * time.Second, ReconnectBackoff: time.Second},
 		Maintenance: config.Maintenance{Workers: 32, CancelGrace: 5 * time.Minute, DetachedGrace: 24 * time.Hour, OutageGrace: 30 * time.Minute, InteractionGrace: 24 * time.Hour, MaxBackoff: 5 * time.Minute},
-		Context:     config.Context{WindowTokens: 8192, OutputTokens: 2048, ToolTokens: 1024, SafetyTokens: 512, PolicyVersion: "v1", CompressionThresholdPercent: 80, KeepRecentRounds: 2, SummaryWindowTokens: 8192, SummaryOutputTokens: 512},
+		Context:     config.Context{PolicyVersion: "v1", CompressionEnabled: true, CompressionThresholdPercent: 80, KeepRecentRounds: 2},
 	}
 	if got := config.Defaults(); !reflect.DeepEqual(got, want) {
 		t.Fatal("default contract changed")
@@ -120,19 +120,15 @@ func TestEveryEnvironmentOverride(t *testing.T) {
 		Logging:     config.Logging{Level: "debug", Path: "logs/custom.log", Size: 10, Rolls: 0},
 		HTTP:        config.HTTP{Login: config.Login{TokenTTL: time.Hour}, MaxSubscriptions: 256, Address: "[::1]:9090", SSEHeartbeat: 750 * time.Millisecond, ShutdownGrace: 90 * time.Second, WriteTimeout: 10 * time.Second, MaxBodyBytes: 1 << 20},
 		MongoDB:     config.MongoDB{URI: values["CAGENT_MONGODB_URI"], Database: "custom"},
-		Agent:       config.Agent{Name: "assistant", MaxTokensField: "max_tokens", RequestTimeout: 2 * time.Minute},
+		Agent:       config.Agent{Name: "assistant", RequestTimeout: 2 * time.Minute},
 		Tasks:       config.Tasks{PollInterval: 3 * time.Second, ObservationTimeout: 45 * time.Second, ReconnectBackoff: 1500 * time.Millisecond},
 		Maintenance: config.Maintenance{Workers: 32, CancelGrace: 5 * time.Minute, DetachedGrace: 24 * time.Hour, OutageGrace: 30 * time.Minute, InteractionGrace: 24 * time.Hour, MaxBackoff: 5 * time.Minute},
-		Context:     config.Context{WindowTokens: 32000, OutputTokens: 4000, ToolTokens: 2000, SafetyTokens: 500, PolicyVersion: "v2", CompressionThresholdPercent: 80, KeepRecentRounds: 2, SummaryWindowTokens: 8192, SummaryOutputTokens: 512},
+		Context:     config.Context{PolicyVersion: "v2", CompressionEnabled: true, CompressionThresholdPercent: 80, KeepRecentRounds: 2},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatal("environment override did not reach expected field")
 	}
-	values["CAGENT_CONTEXT_TOOL_TOKENS"], values["CAGENT_CONTEXT_SAFETY_TOKENS"] = "0", "0"
-	got, err = load(values)
-	if err != nil || got.Context.ToolTokens != 0 || got.Context.SafetyTokens != 0 {
-		t.Fatal("explicit zero silently defaulted")
-	}
+
 }
 
 func TestExplicitBlankStringsAreNotDefaulted(t *testing.T) {
@@ -172,20 +168,7 @@ func TestInvalidNumbersAndDurations(t *testing.T) {
 			}
 		}
 	}
-	for key, field := range map[string]string{
-		"CAGENT_CONTEXT_WINDOW_TOKENS": "context.window_tokens", "CAGENT_CONTEXT_OUTPUT_TOKENS": "context.output_tokens",
-		"CAGENT_CONTEXT_TOOL_TOKENS": "context.tool_tokens", "CAGENT_CONTEXT_SAFETY_TOKENS": "context.safety_tokens",
-	} {
-		for _, bad := range []string{"", "1.5", "0x100", " 100", "NaN", "999999999999999999999999999", "-1"} {
-			values := requiredEnv()
-			values[key] = bad
-			c, err := load(values)
-			assertInvalid(t, err, field)
-			if !reflect.DeepEqual(c, config.Config{}) {
-				t.Fatal("partial configuration returned")
-			}
-		}
-	}
+
 }
 
 func TestAddressValidationWithoutNetworkAccess(t *testing.T) {
@@ -203,49 +186,11 @@ func TestAddressValidationWithoutNetworkAccess(t *testing.T) {
 	}
 }
 
-func TestTokenBudgetBoundariesAndOverflow(t *testing.T) {
-	maxInt := int(^uint(0) >> 1)
-	for _, tc := range []struct {
-		name                         string
-		window, output, tool, safety int
-		field                        string
-	}{
-		{"one input token", 2, 1, 0, 0, ""},
-		{"all reserves", 10, 3, 3, 3, ""},
-		{"exactly exhausted", 9, 3, 3, 3, "context.window_tokens"},
-		{"over budget", 8, 3, 3, 3, "context.window_tokens"},
-		{"zero window", 0, 1, 0, 0, "context.window_tokens"},
-		{"zero output", 10, 0, 0, 0, "context.output_tokens"},
-		{"negative tool", 10, 1, -1, 0, "context.tool_tokens"},
-		{"negative safety", 10, 1, 0, -1, "context.safety_tokens"},
-		{"huge valid budget", maxInt, maxInt - 1, 0, 0, ""},
-		{"overflowing reserves", maxInt, maxInt - 1, maxInt - 1, maxInt - 1, "context.window_tokens"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			c := validConfig(t)
-			c.Context = config.Context{WindowTokens: tc.window, OutputTokens: tc.output, ToolTokens: tc.tool, SafetyTokens: tc.safety, PolicyVersion: "v1"}
-			before := c
-			err := c.Validate()
-			if tc.field == "" {
-				if err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				assertInvalid(t, err, tc.field)
-			}
-			if !reflect.DeepEqual(c, before) {
-				t.Fatal("validation mutated configuration")
-			}
-		})
-	}
-}
-
 func TestDirectConfigurationAndSafeErrors(t *testing.T) {
 	secret := "private-credential-prompt-mongodb://internal-host"
 	for _, tc := range []struct{ key, field string }{
 		{"CAGENT_HTTP_ADDRESS", "http.address"},
 		{"CAGENT_HTTP_SSE_HEARTBEAT", "http.sse_heartbeat"},
-		{"CAGENT_CONTEXT_WINDOW_TOKENS", "context.window_tokens"},
 	} {
 		values := requiredEnv()
 		values[tc.key] = secret
@@ -294,14 +239,15 @@ func TestLoadReadsProcessEnvironment(t *testing.T) {
 		"CAGENT_MAINTENANCE_WORKERS": "32", "CAGENT_MAINTENANCE_CANCEL_GRACE": "5m", "CAGENT_MAINTENANCE_DETACHED_GRACE": "24h", "CAGENT_MAINTENANCE_OUTAGE_GRACE": "30m", "CAGENT_MAINTENANCE_INTERACTION_GRACE": "24h", "CAGENT_MAINTENANCE_MAX_BACKOFF": "5m",
 		"CAGENT_CONTEXT_WINDOW_TOKENS": "100", "CAGENT_CONTEXT_OUTPUT_TOKENS": "10", "CAGENT_CONTEXT_TOOL_TOKENS": "0",
 		"CAGENT_CONTEXT_SAFETY_TOKENS": "1", "CAGENT_CONTEXT_POLICY_VERSION": "test",
-		"CAGENT_CONTEXT_COMPRESSION_THRESHOLD_PERCENT": "80", "CAGENT_CONTEXT_KEEP_RECENT_ROUNDS": "2",
-		"CAGENT_CONTEXT_ARCHIVE_COMPLETED":     "false",
-		"CAGENT_CONTEXT_SUMMARY_WINDOW_TOKENS": "8192", "CAGENT_CONTEXT_SUMMARY_OUTPUT_TOKENS": "512",
+		"CAGENT_CONTEXT_COMPRESSION_ENABLED": "true", "CAGENT_CONTEXT_KEEP_RECENT_ROUNDS": "2",
+		"CAGENT_CONTEXT_COMPRESSION_THRESHOLD_PERCENT": "80",
+		"CAGENT_CONTEXT_ARCHIVE_COMPLETED":             "false",
+		"CAGENT_CONTEXT_SUMMARY_WINDOW_TOKENS":         "8192", "CAGENT_CONTEXT_SUMMARY_OUTPUT_TOKENS": "512",
 	} {
 		t.Setenv(key, value)
 	}
 	c, err := config.Load()
-	if err != nil || c.HTTP.Address != ":9191" || c.Context.WindowTokens != 100 {
+	if err != nil || c.HTTP.Address != ":9191" || c.Context.PolicyVersion != "test" {
 		t.Fatalf("process environment not loaded: %v", err)
 	}
 }

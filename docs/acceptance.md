@@ -45,7 +45,7 @@ go build ./...
 
 ## 外部验收门槛
 
-模型冒烟：设置 `CAGENT_TEST_MODEL=1` 与实际 `CAGENT_AGENT_*`，执行 `go test ./internal/adapter/adk -run TestRealOpenAISmoke -count=1 -v`。模型窗口、编码、max_tokens 字段及摘要质量必须按目标提供方核对，见 [模型](adk.md) 与 [上下文](context.md)。
+模型冒烟：设置 `CAGENT_TEST_MODEL=1` 及 MongoDB 模型配置，执行 `go test ./internal/adapter/adk -run TestRealOpenAISmoke -count=1 -v`。接口兼容性及摘要质量必须按目标提供方核对，见 [模型](adk.md) 与 [上下文](context.md)。
 
 工具冒烟：按 [工具说明](tools.md) 设置 `CAGENT_TEST_TOOLS=1`、`CAGENT_TEST_TOOLS_FILE` 和 `CAGENT_TEST_TOOL_CALL`，执行 `go test ./internal/bootstrap -run TestExternalToolSmoke -count=1 -v`。该测试真实执行一次指定工具，选择专用测试账户与可控操作。仅返回句柄不算长任务通过。
 

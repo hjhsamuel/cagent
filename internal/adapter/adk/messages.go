@@ -17,12 +17,6 @@ import (
 	"google.golang.org/genai"
 )
 
-// RequestCounter 计数最终 SDK 请求（包括 SystemInstruction），由实际提供方适配器实现。
-// Count 是 P5 入口，执行前还会用同一映射重新计数，避免 SDK 注入内容绕过预算。
-type RequestCounter interface {
-	CountRequest(context.Context, *model.LLMRequest) (int, error)
-}
-
 func invalid(field string) error {
 	return apperrors.New(apperrors.ErrInvalidArgument, field, "invalid model adapter argument")
 }
@@ -57,11 +51,11 @@ func (e *modelError) Error() string        { return ErrModel.Error() }
 func (e *modelError) Unwrap() error        { return e.cause }
 func (e *modelError) Is(target error) bool { return target == ErrModel }
 
-// mapMessages 统一 P5 计数与执行的消息映射，系统消息只进入 SystemInstruction。
+// mapMessages 统一执行与恢复的消息映射，系统消息只进入 SystemInstruction。
 // 工具历史的 ID 按原 Run+CallID 映射，避免不同运行的局部 ID 冲突；原 Task 路由不变。
 // P6 支持文本和既有结构化工具历史；多模态/新工具执行留给 P8，未知内容明确拒绝。
-func mapMessages(messages []domain.Message, name string, output int32) (*model.LLMRequest, error) {
-	req := &model.LLMRequest{Model: name, Config: &genai.GenerateContentConfig{MaxOutputTokens: output}}
+func mapMessages(messages []domain.Message, name string) (*model.LLMRequest, error) {
+	req := &model.LLMRequest{Model: name, Config: &genai.GenerateContentConfig{}}
 	type key struct{ run, id string }
 	names := map[key]string{}
 	for _, m := range messages {

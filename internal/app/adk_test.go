@@ -26,9 +26,9 @@ func adkConfig(url string) config.Config {
 	cfg.MongoDB.URI = "mongodb://localhost:27017"
 	cfg.Agent.Provider = "openai"
 	cfg.Agent.Model = "configured-model"
+	cfg.Agent.WindowTokens = 10240
 	cfg.Agent.BaseURL = url
 	cfg.Agent.APIKey = "test-key"
-	cfg.Agent.TokenEncoding = "o200k_base"
 	return cfg
 }
 

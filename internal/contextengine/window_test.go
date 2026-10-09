@@ -2,7 +2,6 @@ package contextengine
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
@@ -17,7 +16,7 @@ func TestVerifiedWindowPreservesUsersAndRejectsTailGaps(t *testing.T) {
 	in.VerifiedPrefix = 2
 	in.HistoryThrough = 3
 	in.History = []domain.Message{in.History[0], in.History[2]}
-	out, err := builder(t, counterFunc(testCount)).Prepare(context.Background(), in)
+	out, err := builder(t).Prepare(context.Background(), in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,24 +25,25 @@ func TestVerifiedWindowPreservesUsersAndRejectsTailGaps(t *testing.T) {
 	}
 	in.History[1].Sequence = 4
 	in.HistoryThrough = 4
-	if _, err = builder(t, counterFunc(testCount)).Prepare(context.Background(), in); err == nil {
+	if _, err = builder(t).Prepare(context.Background(), in); err == nil {
 		t.Fatal("tail gap accepted")
 	}
 	in.History[1].Sequence = 3
 	in.HistoryThrough = 3
 	in.Snapshot.ValidatedThrough = 0
-	if _, err = builder(t, counterFunc(testCount)).Prepare(context.Background(), in); err == nil {
+	if _, err = builder(t).Prepare(context.Background(), in); err == nil {
 		t.Fatal("legacy snapshot authorized gaps")
 	}
 }
 func TestArchiveCompletedRoundKeepsCurrentAndOriginalHistory(t *testing.T) {
 	in := toolInput()
+	in.History[3].PromptTokens = 8192
 	in.ArchiveCompleted = true
 	in.RunStates = map[string]domain.RunStatus{"old": domain.RunCompleted}
 	before := cloneMessages(in.History)
-	b, err := NewCompressing(counterFunc(testCount), summaryFunc(func(context.Context, []domain.Message) (string, error) {
+	b, err := NewCompressing(summaryFunc(func(context.Context, []domain.Message) (string, error) {
 		return "constraint: original requirements; tool result facts", nil
-	}), CompressionPolicy{1, 1})
+	}), CompressionPolicy{WindowTokens: 10240, ThresholdPercent: 80, KeepRecentRounds: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,25 +66,5 @@ func TestArchiveCompletedRoundKeepsCurrentAndOriginalHistory(t *testing.T) {
 		if in.History[i].ID != before[i].ID {
 			t.Fatal("source modified")
 		}
-	}
-}
-func TestSegmentSummarySplitsOnlyBudgetRejection(t *testing.T) {
-	source := input().History
-	calls := 0
-	text, err := summarizeSegments(context.Background(), summaryFunc(func(_ context.Context, m []domain.Message) (string, error) {
-		calls++
-		if len(m) > 2 {
-			return "", ErrBudgetExceeded
-		}
-		return "facts", nil
-	}), source)
-	if err != nil || text != "facts" || calls != 4 {
-		t.Fatal(text, err, calls)
-	}
-	calls = 0
-	failure := errors.New("provider failed")
-	_, err = summarizeSegments(context.Background(), summaryFunc(func(context.Context, []domain.Message) (string, error) { calls++; return "", failure }), source)
-	if !errors.Is(err, failure) || calls != 1 {
-		t.Fatal("model failure retried", err, calls)
 	}
 }

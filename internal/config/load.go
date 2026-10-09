@@ -23,12 +23,20 @@ func LoadFromEnv(lookup func(string) (string, bool), names ...string) (Config, e
 		return Config{}, invalid("environment", "environment lookup is required")
 	}
 	c := Defaults()
-	if value, present := lookup("CAGENT_CONTEXT_ARCHIVE_COMPLETED"); present {
-		parsed, err := strconv.ParseBool(value)
-		if err != nil {
-			return Config{}, invalid("context.archive_completed", "must be a boolean")
+	for _, setting := range []struct {
+		key, field string
+		dst        *bool
+	}{
+		{"CAGENT_CONTEXT_ARCHIVE_COMPLETED", "context.archive_completed", &c.Context.ArchiveCompleted},
+		{"CAGENT_CONTEXT_COMPRESSION_ENABLED", "context.compression_enabled", &c.Context.CompressionEnabled},
+	} {
+		if value, present := lookup(setting.key); present {
+			parsed, err := strconv.ParseBool(value)
+			if err != nil {
+				return Config{}, invalid(setting.field, "must be a boolean")
+			}
+			*setting.dst = parsed
 		}
-		c.Context.ArchiveCompleted = parsed
 	}
 	logging, err := LoadLoggingFromEnv(lookup)
 	if err != nil {
@@ -91,15 +99,9 @@ func LoadFromEnv(lookup func(string) (string, bool), names ...string) (Config, e
 		{"CAGENT_CAPACITY_MODELS", "capacity.models", &c.Capacity.Models},
 		{"CAGENT_CAPACITY_OBSERVATIONS", "capacity.observations", &c.Capacity.Observations},
 		{"CAGENT_HTTP_MAX_SUBSCRIPTIONS", "http.max_subscriptions", &c.HTTP.MaxSubscriptions},
-		{"CAGENT_CONTEXT_WINDOW_TOKENS", "context.window_tokens", &c.Context.WindowTokens},
-		{"CAGENT_CONTEXT_COMPRESSION_THRESHOLD_PERCENT", "context.compression_threshold_percent", &c.Context.CompressionThresholdPercent},
 		{"CAGENT_CONTEXT_KEEP_RECENT_ROUNDS", "context.keep_recent_rounds", &c.Context.KeepRecentRounds},
-		{"CAGENT_CONTEXT_SUMMARY_WINDOW_TOKENS", "context.summary_window_tokens", &c.Context.SummaryWindowTokens},
-		{"CAGENT_CONTEXT_SUMMARY_OUTPUT_TOKENS", "context.summary_output_tokens", &c.Context.SummaryOutputTokens},
+		{"CAGENT_CONTEXT_COMPRESSION_THRESHOLD_PERCENT", "context.compression_threshold_percent", &c.Context.CompressionThresholdPercent},
 		{"CAGENT_HTTP_MAX_BODY_BYTES", "http.max_body_bytes", &c.HTTP.MaxBodyBytes},
-		{"CAGENT_CONTEXT_OUTPUT_TOKENS", "context.output_tokens", &c.Context.OutputTokens},
-		{"CAGENT_CONTEXT_TOOL_TOKENS", "context.tool_tokens", &c.Context.ToolTokens},
-		{"CAGENT_CONTEXT_SAFETY_TOKENS", "context.safety_tokens", &c.Context.SafetyTokens},
 	} {
 		if value, present := lookup(item.key); present {
 			parsed, err := strconv.Atoi(value)

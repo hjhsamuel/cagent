@@ -8,29 +8,25 @@ import (
 	"math"
 	"net/http"
 	"strings"
-	"sync"
 
 	"github.com/hjhsamuel/cagent/internal/config"
 	"github.com/hjhsamuel/cagent/internal/observability"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
-	"github.com/tiktoken-go/tokenizer"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
 
 // OpenAIModel 通过官方 OpenAI SDK 的 Chat Completions 实现 ADK model.LLM。
-// 模型、URL、密钥、编码均在构造时显式传入；不同实例互不共享动态配置。
+// 模型、URL、密钥均在构造时显式传入；不同实例互不共享动态配置。
 // 不采用 ADK openaimodel 的 Responses 路径，以兼容只实现 Chat Completions 的服务。
 type OpenAIModel struct {
-	capacity         *observability.Gate
-	client           openai.Client
-	keys             *config.KeyPool
-	thinking         *config.Thinking
-	name, limitField string
-	codec            tokenizer.Codec
-	mu               sync.Mutex
+	capacity *observability.Gate
+	client   openai.Client
+	keys     *config.KeyPool
+	thinking *config.Thinking
+	name     string
 }
 
 // NewOpenAI 不发网络请求，不回退到 SDK 环境变量。显式关闭自动重试，避免未知
@@ -39,10 +35,6 @@ type OpenAIModel struct {
 func NewOpenAI(cfg config.Agent, client *http.Client) (*OpenAIModel, error) {
 	if err := cfg.ValidateOpenAI(); err != nil {
 		return nil, err
-	}
-	codec, err := tokenizer.Get(tokenizer.Encoding(cfg.TokenEncoding))
-	if err != nil {
-		return nil, unsupported("agent.token_encoding")
 	}
 	httpClient := &http.Client{}
 	if client != nil {
@@ -63,7 +55,13 @@ func NewOpenAI(cfg config.Agent, client *http.Client) (*OpenAIModel, error) {
 			return nil, invalid("model.thinking")
 		}
 	}
-	return &OpenAIModel{capacity: observability.NewGate(config.Defaults().Capacity.Models, "model"), client: sdk, keys: cfg.Keys, thinking: thinking, name: cfg.Model, limitField: cfg.MaxTokensField, codec: codec}, nil
+	return &OpenAIModel{
+		capacity: observability.NewGate(config.Defaults().Capacity.Models, "model"),
+		client:   sdk,
+		keys:     cfg.Keys,
+		thinking: thinking,
+		name:     cfg.Model,
+	}, nil
 }
 
 // SetCapacity 仅允许启动装配时调用；主模型与摘要模型共享同一闸门。
@@ -142,44 +140,6 @@ func wireMessages(req *model.LLMRequest) ([]openai.ChatCompletionMessageParamUni
 	return out, nil
 }
 
-// CountRequest 使用显式 BPE 编码计数实际线格式，并加入每消息封装余量。
-// 兼容接口不提供统一的模型计数/窗口查询，不能按任意模型名猜编码。此值是估算，
-// 部署必须选择实际编码并保留 SafetyTokens，真实冒烟测试对照服务端 usage 校验。
-func (m *OpenAIModel) CountRequest(ctx context.Context, req *model.LLMRequest) (int, error) {
-	if err := ctx.Err(); err != nil {
-		return 0, err
-	}
-	messages, err := wireMessages(req)
-	if err != nil {
-		return 0, err
-	}
-	definitions, err := wireTools(req)
-	if err != nil {
-		return 0, err
-	}
-	var counted any = messages
-	if len(definitions) > 0 {
-		counted = map[string]any{"messages": messages, "tools": definitions}
-	}
-	data, err := json.Marshal(counted)
-	if err != nil {
-		return 0, safeError(err)
-	}
-	m.mu.Lock()
-	n, err := m.codec.Count(string(data))
-	m.mu.Unlock()
-	if err != nil {
-		return 0, safeError(err)
-	}
-	if n < 0 || len(messages) > (math.MaxInt-n-8)/8 {
-		return 0, invalid("tokens")
-	}
-	if err = ctx.Err(); err != nil {
-		return 0, err
-	}
-	return n + 8 + 8*len(messages), nil
-}
-
 // GenerateContent 对 SSE 增量逐片背压，结束时仅输出一个完整 LLMResponse。
 // 缺失 stop、截断、拒绝及中途错误都不伪造成功；关闭流释放 HTTP 连接。
 // 工具轮次要求完整 tool_calls 响应，参数解码成功后才交给 ADK 执行。
@@ -223,15 +183,6 @@ func (m *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 		// 无工具的普通文本仍保留原有 SSE 增量路径。
 		if len(definitions) > 0 {
 			stream = false
-		}
-		if req.Config.MaxOutputTokens <= 0 {
-			yield(nil, invalid("model.output_tokens"))
-			return
-		}
-		if m.limitField == "max_tokens" {
-			params.MaxTokens = openai.Int(int64(req.Config.MaxOutputTokens))
-		} else {
-			params.MaxCompletionTokens = openai.Int(int64(req.Config.MaxOutputTokens))
 		}
 		var requestOptions []option.RequestOption
 		if m.keys != nil {
@@ -280,7 +231,10 @@ func (m *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 					}
 					content.Parts = append(content.Parts, &genai.Part{FunctionCall: &genai.FunctionCall{ID: f.ID, Name: f.Function.Name, Args: args}})
 				}
-				yield(&model.LLMResponse{Content: content, TurnComplete: true}, nil)
+				response := finalResponse("", resp.Usage.PromptTokens, resp.Usage.CompletionTokens)
+				response.Content = content
+				response.FinishReason = ""
+				yield(response, nil)
 				return
 			}
 			if len(resp.Choices) != 1 || resp.Choices[0].FinishReason != "stop" || len(resp.Choices[0].Message.ToolCalls) > 0 || resp.Choices[0].Message.Refusal != "" || len(resp.Choices[0].Message.Content) > 8<<20 {
@@ -352,7 +306,7 @@ func (m *OpenAIModel) GenerateContent(ctx context.Context, req *model.LLMRequest
 	}
 }
 
-// wireTools 同时用于 Token 计数和发送，工具 Schema 不能从预算中遗漏。
+// wireTools 将工具声明映射为实际发送的 OpenAI 请求结构。
 func wireTools(req *model.LLMRequest) ([]map[string]any, error) {
 	var out []map[string]any
 	for _, group := range req.Config.Tools {

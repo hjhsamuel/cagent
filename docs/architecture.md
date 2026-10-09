@@ -2,7 +2,7 @@
 
 ## 范围与依赖方向
 
-当前已完成 P1 公共组件、P2 存储契约及 P3 MongoDB 适配器，包含事务、租约、幂等回执、序号分页、检查点和交付记录的真实持久化。MongoDB 8.0.32 单节点副本集集成验证已通过。P4 应用服务、服务内运行生命周期和持久事件流已实现；P5 上下文/预算、P6 ADK/OpenAI、P7 Gin/JWT/HTTP/SSE 与启动装配均已通过本地验收。P8 工具注册、本地/MCP/A2A 协议适配、ADK 工具循环、任务交接和暂停交互已实现并验证。P9 任务持续跟踪、精确续接和恢复扫描、P10.1 上下文压缩及 P10.2 容量与观测已实现。P10.3 补齐端到端重启续接/SSE 重放、提交断连故障测试和交付脚本，见 [整体验收](acceptance.md) 与 [部署交付](deployment.md)。外部模型/工具及生产拓扑验收仍待环境配置，项目未全部验收完成。
+当前已完成 P1 公共组件、P2 存储契约及 P3 MongoDB 适配器，包含事务、租约、幂等回执、序号分页、检查点和交付记录的真实持久化。MongoDB 8.0.32 单节点副本集集成验证已通过。P4 应用服务、服务内运行生命周期和持久事件流已实现；P5 上下文组装、P6 ADK/OpenAI、P7 Gin/JWT/HTTP/SSE 与启动装配均已通过本地验收。P8 工具注册、本地/MCP/A2A 协议适配、ADK 工具循环、任务交接和暂停交互已实现并验证。P9 任务持续跟踪、精确续接和恢复扫描、P10.1 上下文压缩及 P10.2 容量与观测已实现。P10.3 补齐端到端重启续接/SSE 重放、提交断连故障测试和交付脚本，见 [整体验收](acceptance.md) 与 [部署交付](deployment.md)。外部模型/工具及生产拓扑验收仍待环境配置，项目未全部验收完成。
 
 ### 已实现：P8 工具边界与协议适配
 
@@ -12,7 +12,7 @@ MCP 使用官方 modelcontextprotocol/go-sdk v1.8.0，固定 2025-11-25 Streamab
 
 TaskClient 的观察参数从 Scope 扩展为原 ToolCall，结果可按原 CallID 关联；调用方必须先按认证 Scope 读取持久 Task。新增 TaskInteractor，JWT 路由 `/tasks/:taskID/input` 和 `/tasks/:taskID/authorization` 仅引用本地任务 ID，后者只接受可信凭据引用。应用拒绝终态 Run，确认远端暂停后补充原任务；202 不表示终态或本地恢复。
 
-ADK 工具定义参与每轮模型输入预算；有工具声明时使用完整非流式 Chat Completions，避免未完整参数触发执行。即时调用/结果以 assistant/tool 角色成对持久化；任务句柄触发真实 SDK 暂停检查点，经 Update.Tasks 和当前 Fence 下的 TrackTask 事务交接。ErrWaiting 保留 Run waiting_tool 与会话占用，不提交 completed。多任务逐个登记，SDK 检查点 Data 保留整批句柄，P9 已从整批持久句柄补齐部分登记，不重执行工具。
+ADK 工具定义随每轮模型请求发送，不计算 Token 预算；有工具声明时使用完整非流式 Chat Completions，避免未完整参数触发执行。即时调用/结果以 assistant/tool 角色成对持久化；任务句柄触发真实 SDK 暂停检查点，经 Update.Tasks 和当前 Fence 下的 TrackTask 事务交接。ErrWaiting 保留 Run waiting_tool 与会话占用，不提交 completed。多任务逐个登记，SDK 检查点 Data 保留整批句柄，P9 已从整批持久句柄补齐部分登记，不重执行工具。
 
 P9 已接入持续观察、生产 Runtime.Resume、TaskDelivery 原子消费与启动恢复扫描。真实 ADK、本地 MCP/A2A HTTP/SSE 提供方及 MongoDB 双任务持久化已验证，外部提供方未配置。
 
@@ -94,7 +94,7 @@ Task 允许跳过未观察到的中间状态，不要求先观察 running 才接
 
 `internal/config` 提供 `Defaults()`、`Load()`、可注入环境快照的 `LoadFromEnv()` 和 `Config.Validate()`。加载顺序为默认值 → 已设置的 `CAGENT_*` 环境变量 → 类型解析 → 集中校验；未设置保留默认值，显式空值不能触发回退。任何失败返回零值 Config，错误归为 `apperrors.ErrInvalidArgument`，携带稳定配置路径，不回显输入或保留包含输入的解析错误原因。
 
-已有 Logging、HTTP、MongoDB、Agent、Tasks、Context 共 20 项全部可由环境变量设置。校验日志级别/路径/轮转参数、监听地址、必填字段、正时间间隔以及输入 Token 预算至少为一；预算检查避免预留之和溢出。MongoDB URI、Provider、Model 必须显式配置；模型窗口默认值只是起点，不代表提供方真实能力。MongoDB URI/Database 与 Agent 字符串只验证非空白，驱动约束、真实连接、提供方支持及模型窗口匹配留给后续适配器。
+Logging、HTTP、MongoDB、Agent、Tasks、Context 的进程配置由环境变量加载，模型文档从 MongoDB 读取。校验日志级别/路径/轮转参数、监听地址、必填字段、正时间间隔和历史保留轮数；不计算 Token 预算。实际连接与提供方接口支持在运行时验证。
 
 配置是进程启动时取得的独立快照，不存储请求身份；配置包不读取文件、连接网络或输出日志。server 入口先通过 joho/godotenv 自动加载当前工作目录的 `.env`，已有环境变量优先。完整 Config 及 URI 可能包含凭据，不得整体记录。缓冲、租约、认证等选项在对应模块明确实际需求后增加；现有入口已加载完整配置，追加 HTTP.ValidateServer 验证 JWT 和传输限制。完整键表、优先级和示例见 [配置约定](configuration.md) 与 [配置示例](../.env.example)。
 
@@ -147,7 +147,7 @@ internal/
   agent/
     runtime.go             # Runtime：Agent/Subagent 执行与续接
     tasks.go               # TaskTracker：已有工具长任务的生命周期
-  contextengine/          # 已实现上下文组装/预算；保留 P10 压缩契约
+  contextengine/          # 已实现上下文组装/用量触发摘要；保留 P10 压缩契约
   tool/registry.go         # 工具发现、执行及提供方 TaskClient
   tool/catalog.go          # 不可变 Scope 注册、Schema/超时/输出边界
   domain/                 # 与 SDK 无关的共享领域类型
@@ -214,7 +214,7 @@ docs/architecture.md
 
 EventStream.Publish 从原来的 Publish(Event) 占位契约改为接收 CommitRunRequest，携带租约、版本、稳定操作 ID 和可选消息，防止独立发布绕过事务。Follow 通过同一持久游标分页追赶与跟随，每个订阅只缓存一页，同步回调施加背压。EventPage.Terminal 与水位同快照返回，消费到终态水位就结束；过期与未来游标明确报错。P7 HTTP 层已实施单次写/flush 截止时间，避免慢连接永久阻塞。
 
-Update.Message 表示完整 assistant 消息，与事件一起提交；运行时返回后应用决定 completed/failed，禁止运行时自己发终止事件，迟到 Emit 拒绝。默认准备原始历史且不重复追加当前输入，P5 通过 Prepare 接入预算。RecoverRun 为 P9 提供作用域内调度入口；queued 可以首次执行，已开始运行必须配置专门 Recover 回调，禁止重新 Execute。P6/P9 已接入真实检查点与工具结果续接。完整装配与行为验证见 [应用服务说明](application.md)。
+Update.Message 表示完整 assistant 消息，与事件一起提交；运行时返回后应用决定 completed/failed，禁止运行时自己发终止事件，迟到 Emit 拒绝。默认准备原始历史且不重复追加当前输入，P5 通过 Prepare 接入上下文组装。RecoverRun 为 P9 提供作用域内调度入口；queued 可以首次执行，已开始运行必须配置专门 Recover 回调，禁止重新 Execute。P6/P9 已接入真实检查点与工具结果续接。完整装配与行为验证见 [应用服务说明](application.md)。
 
 ## ADK、MCP 与 A2A
 
@@ -273,7 +273,7 @@ P2 不保证外部模型/工具副作用恰好一次。SDK 必须支持先持久
 
 `mongodb.Open` 使用官方 Go 驱动 v2.9.1，验证连接、事务拓扑及集合二进制排序规则，幂等初始化索引；standalone 不降级支持。普通读取使用 primary/majority，跨文档事务使用 snapshot/majority；Options.Timeout 和调用方 context 共同限制操作。未知数据库错误采用安全展示文本并保留原因链。
 
-适配器定义 schema=1 BSON 信封，显式存储 Scope、关联、版本与查询投影，业务载荷位于私有 data 子文档；领域类型无 BSON/JSON 标签。租约使用服务器 `$$NOW` 条件更新及真实 Revision 写冲突。Commit/Apply 摘要采用版本化固定结构 BSON 编码，含固定兼容样本测试。恢复管理连接由独立 OpenRecovery 构造，不通过普通 Database 暴露。
+适配器定义 schema=1 BSON 信封，显式存储 Scope、关联、版本与查询投影，业务载荷位于私有 data 子文档；领域字段沿用 Go 小写 BSON 映射。消息新增的 PromptTokens 为可选字段，零值省略，兼容旧消息及旧事务回执；含用量的提交使用 mutation-v3 摘要身份。租约使用服务器 `$$NOW` 条件更新及真实 Revision 写冲突。Commit/Apply 摘要采用版本化固定结构 BSON 编码，含固定兼容样本测试。恢复管理连接由独立 OpenRecovery 构造，不通过普通 Database 暴露。
 
 Run 的 unsettled 数量与 Task 的 unsettled 标记是事务维护的查询投影，不替代 TaskDelivery 事实记录。事件清理由 PruneEvents 同事务删除连续前缀并更新水位，管理水位不增加业务 Run.Version。MongoDB 日期精度为毫秒，因此租期至少为 1 ms。
 
@@ -298,26 +298,26 @@ Run 的 unsettled 数量与 Task 的 unsettled 标记是事务维护的查询投
 
 准备顺序：固定系统约束 → 已持久化摘要 → 未覆盖的近期消息 → 当前输入及必要工具结果。ContextSnapshot 通过 ThroughSequence 标记覆盖范围，摘要是派生数据，原始历史始终保留。
 
-输入预算 = WindowTokens − OutputTokens − ToolTokens − SafetyTokens。TokenCounter 由模型适配实现；估算、压缩结果仍超预算时要继续裁剪或返回明确错误。P10.1 已配置压缩阈值、近期轮数及独立摘要模型。
+上下文不计算 Token 预算、不设置模型输出 Token 限额。自动摘要由 CompressionEnabled 控制，最新 assistant 响应报告的 prompt_tokens 达到主模型 WindowTokens 的 CompressionThresholdPercent（默认 80%）后，在下一轮准备时触发；历史还须超出 KeepRecentRounds 保留范围且存在可替换消息。
 
-压缩必须保留系统约束、用户关键要求、完整工具调用/结果对和未完成工具调用。外部工具文本视为不可信内容。压缩快照带策略版本和并发版本，防止旧摘要覆盖新历史；失败应有有界回退策略，不能直接发送超长上下文。
+压缩必须保留系统约束、用户关键要求、完整工具调用/结果对和未完成工具调用。外部工具文本视为不可信内容。压缩快照带策略版本和并发版本，防止旧摘要覆盖新历史；失败时保留原文或兼容旧快照，不重复生成。
 
 ### 已实现：P5 上下文基础能力
 
-`contextengine.New(counter)` 创建无会话状态的 Builder，输入包含可信 System、完整有序 History、当前 RunID、可选持久 Snapshot 和策略版本。完整历史从序号 1 读取，校验作用域/会话、身份唯一和连续序号，拒绝把历史消息伪装为 system。摘要作为 user 角色派生资料，工具返回保持 tool 角色，追加可信资料边界说明。
+`contextengine.New()` 创建无会话状态的 Builder，输入包含可信 System、完整有序 History、当前 RunID、可选持久 Snapshot 和策略版本。完整历史从序号 1 读取，校验作用域/会话、身份唯一和连续序号，拒绝把历史消息伪装为 system。摘要作为 user 角色派生资料，工具返回保持 tool 角色，追加可信资料边界说明。
 
 摘要覆盖前缀可以替代普通旧消息，但所有工具调用/结果所在消息、未完成调用及当前 Run 的原始消息始终保留。PartToolCall/PartToolResult 明确工具语义，按 RunID+ToolCallID 配对，拒绝孤立、重复及错配。模型历史调用 ID 在 Run 内唯一，后续适配器负责并行提供方局部 ID 映射；Task/Checkpoint 原有 InvocationID 路由不变。
 
-最终 Messages 整体计数一次，所有封装/说明都参与预算，不采用快照 TokenEstimate。预算扣减防溢出，超限明确返回 ErrBudgetExceeded，不生成可误用的部分上下文；不隐式裁剪或生成新摘要。P10.1 通过 CompressingBuilder 在该基础上提供压缩策略。输入、输出和计数器副本深拷贝隔离。
+最终 Messages 保持原始消息与工具关联，不计算 Token 或裁剪内容；输入、输出与快照深拷贝隔离。CompressingBuilder 在此基础上依据 LLM 报告的输入用量生成派生摘要。
 
-`app.NewContextPreparer` 按作用域分页读取历史与最新摘要，注入 P4 Options.Prepare；准备失败不调用 Runtime。默认原始历史路径仅供 P4 替身，P6 真实模型装配必须使用预算化准备并验证计数器。完整契约、装配及真实副本集行为测试见 [上下文说明](context.md)。
+`app.NewContextPreparer` 按作用域分页读取历史与最新摘要，注入 P4 Options.Prepare；准备失败不调用 Runtime。真实模型装配通过该准备器校验历史与工具关联。完整契约、装配及真实副本集行为测试见 [上下文说明](context.md)。
 
 ## 实现顺序与验证
 
 1. 配置校验与装配、Gin 身份作用域、MongoDB repositories 及索引。
 2. ADK 最小执行链路、持久化会话、Run 状态与 SSE 重放。
 3. MCP/A2A 适配、工具长任务识别、进度跟踪、取消及 Agent/Subagent 续接。
-4. Token 预算、压缩策略、日志指标与容量控制。
+4. 用量触发的摘要策略、日志指标与容量控制。
 
 实施时重点验证：跨用户越权拒绝、同会话并发冲突、SSE 重连与慢消费者、多实例事件传播、调用动态返回任务句柄、Subagent 结果路由、多个长任务并行、服务重启后跟踪同一远端任务、重复/乱序终态、观察超时与远端失败区分、取消竞争、重复续接及工具调用对在压缩后的完整性。已为领域校验添加行为测试，不为接口占位添加空测试；检查命令为 `go test ./...`、`go vet ./...` 和 `go build ./...`。
 
@@ -329,7 +329,7 @@ Gin v1.11.0 与 JWT v5.3.1 已接入；HTTP 认证只需配置 Secret，固定�
 
 SSE 在提交头前调用 DurableEvents.CheckCursor，之后用 Follow 逐页重放/跟随；心跳和事件由同一 handler 串行写，无缓冲通道施加背压，每次写/flush 设置截止时间。终态水位消费完即关闭，断连只停止订阅。data 为 JSON 信封，其中原始载荷 base64 编码，详见 [HTTP 契约](http.md)。
 
-bootstrap.Run 装配实际数据库、预算化 ADK 应用和监听；/healthz 与 /readyz 分别报告 HTTP 存活和数据库就绪。信号触发撤销就绪、取消 SSE、关闭监听/等待请求、关闭应用、关闭数据库，最后关闭日志。关闭不代表用户取消；P9 已装配 Task API 与独立管理连接的恢复扫描。
+bootstrap.Run 装配实际数据库、ADK 应用和监听；/healthz 与 /readyz 分别报告 HTTP 存活和数据库就绪。信号触发撤销就绪、取消 SSE、关闭监听/等待请求、关闭应用、关闭数据库，最后关闭日志。关闭不代表用户取消；P9 已装配 Task API 与独立管理连接的恢复扫描。
 
 真实单节点副本集、本地模型协议、Gin/JWT/ADK/SSE 端到端和竞态测试已验证；外部真实模型与生产部署级拓扑仍待环境配置。
 
@@ -349,11 +349,11 @@ Runtime.Resume 只接纳一个精确匹配 Scope/Run/Caller/ToolCall 的终态�
 
 ## 已实现：P10.1 上下文压缩
 
-生产 NewOpenAIService 默认以输入预算 80% 触发一次摘要，保留近期 2 个用户轮次（含当前轮）。压缩路径始终保留全部用户原文、系统约束、当前 Run 消息、工具调用/结果承载消息和未完成调用；只用摘要替换早期普通 assistant 消息。摘要是 user 派生资料，不赋予系统权限。
+生产 NewOpenAIService 默认启用依据最新 LLM 响应 prompt_tokens 达到主模型上下文上限的 80% 触发的摘要，保留近期 2 个用户轮次（含当前轮）。压缩路径保留全部用户原文、系统约束、当前 Run 消息、工具调用/结果承载消息和未完成调用；只用摘要替换早期普通 assistant 消息。摘要是 user 派生资料，不赋予系统权限。
 
-CompressingBuilder 先校验完整历史，按当前策略选择快照；策略版本变化从原始前缀重建，不递归摘要旧摘要。摘要模型使用独立模型名、编码和窗口预算，共用可信端点、凭据和超时；历史编码为不可信 JSON 资料，无工具声明，防止待完成调用被再次执行。摘要请求自身受预算限制，生成结果经主模型计数器整体复核。最多尝试一次；失败只可回退到已验证未超预算的上下文，否则明确报错。
+CompressingBuilder 先校验完整历史，按当前策略选择快照；策略版本变化从原始前缀重建，兼容快照结合旧摘要和新增前缀进行增量摘要。摘要独立选择模型和凭据，采用所选文档的端点与超时；历史编码为不可信 JSON 资料，无工具声明。每次准备最多调用一次摘要模型，失败或空摘要时回退到原输入，不分段或重试。
 
-Prepare 返回待保存候选和读取时的会话版本，不持有写权限。应用保持租约续期，在写锁内使用 SaveSnapshot 校验 Fence、Run/Session/快照版本和 ThroughSequence 单调水位；成功刷新 Run.Version 后才交给主运行时。不同实例的过时候选不能覆盖新历史。原始历史永不删除。已有 SDK 检查点恢复不重新压缩，避免破坏精确任务续接；工具循环继续使用预算检查，超限明确失败。
+Prepare 返回待保存候选和读取时的会话版本，不持有写权限。应用保持租约续期，在写锁内使用 SaveSnapshot 校验 Fence、Run/Session/快照版本和 ThroughSequence 单调水位；成功刷新 Run.Version 后才交给主运行时。不同实例的过时候选不能覆盖新历史。原始历史永不删除。已有 SDK 检查点恢复不重新压缩，避免破坏精确任务续接；工具循环保留调用次数限制和结构化历史。
 
 详细配置、回退、验证及真实提供方限制见 [上下文说明](context.md)。
 

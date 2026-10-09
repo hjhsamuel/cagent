@@ -2,45 +2,39 @@ package contextengine
 
 import (
 	"context"
-	"errors"
 	"math"
 	"strings"
 
 	"github.com/hjhsamuel/cagent/internal/domain"
 )
 
-// Summarizer 只生成派生文本，不选择覆盖水位，也不执行工具。实现必须自行限制
-// 摘要请求的输入、输出和超时；历史是不可信资料，不能提升成系统指令。
+// Summarizer 只生成派生文本，不选择覆盖水位或执行工具；历史是不可信资料。
 type Summarizer interface {
 	Summarize(context.Context, []domain.Message) (string, error)
 }
 
-// CompressionPolicy 的阈值按可用输入预算百分比计算；近期轮数包含当前 Run。
+// CompressionPolicy 依据最新 assistant 响应报告的 prompt_tokens 触发摘要。
+// 近期轮数只决定摘要范围，包含当前 Run。
 // 一轮从 user 消息开始，保留整个尾部，因此不会从 assistant 消息中间截断。
 type CompressionPolicy struct {
+	WindowTokens     int64
 	ThresholdPercent int
 	KeepRecentRounds int
 }
 
-// CompressingBuilder 可并发复用，摘要预算拒绝时允许最多 32 次受限分段尝试。失败只回退到已经
-// 通过预算检查的输入；无可用回退则返回错误，不裁掉用户要求或工具关联。
+// CompressingBuilder 可并发复用；摘要失败时保留原输入，不重复生成或裁剪历史。
 type CompressingBuilder struct {
 	builder *Builder
 	summary Summarizer
 	policy  CompressionPolicy
 }
 
-// NewCompressing 复制策略值，不读环境、不调用模型；计数器与摘要实现必须支持并发。
-// 非法阈值或保留轮数立即拒绝，避免运行到预算上限才暴露装配错误。
-func NewCompressing(counter TokenCounter, summary Summarizer, policy CompressionPolicy) (*CompressingBuilder, error) {
-	if summary == nil || policy.ThresholdPercent < 1 || policy.ThresholdPercent > 100 || policy.KeepRecentRounds < 1 {
+// NewCompressing 复制用量阈值和轮次策略，不读取环境或调用模型。
+func NewCompressing(summary Summarizer, policy CompressionPolicy) (*CompressingBuilder, error) {
+	if summary == nil || policy.WindowTokens <= 0 || policy.ThresholdPercent < 1 || policy.ThresholdPercent > 100 || policy.KeepRecentRounds < 1 {
 		return nil, invalid("context.compression")
 	}
-	b, err := New(counter)
-	if err != nil {
-		return nil, err
-	}
-	return &CompressingBuilder{builder: b, summary: summary, policy: policy}, nil
+	return &CompressingBuilder{builder: New(), summary: summary, policy: policy}, nil
 }
 
 // Compatible validated prefixes use incremental summaries. A policy change
@@ -74,33 +68,39 @@ func (b *CompressingBuilder) Prepare(ctx context.Context, in Input) (Prepared, e
 		if err := previous.ValidateForSession(in.Session); err != nil {
 			return Prepared{}, err
 		}
-		if previous.Version <= 0 || previous.ThroughSequence <= 0 || len(in.History) == 0 || previous.ThroughSequence > in.History[len(in.History)-1].Sequence || previous.TokenEstimate < 0 || strings.TrimSpace(previous.Summary) == "" || strings.TrimSpace(previous.PolicyVersion) == "" {
+		if previous.Version <= 0 || previous.ThroughSequence <= 0 || len(in.History) == 0 || previous.ThroughSequence > in.History[len(in.History)-1].Sequence || strings.TrimSpace(previous.Summary) == "" || strings.TrimSpace(previous.PolicyVersion) == "" {
 			return Prepared{}, invalid("context.snapshot")
 		}
 	}
 	if previous != nil && (previous.PolicyVersion != in.PolicyVersion || previous.ThroughSequence > through) {
 		in.Snapshot = nil
 	}
-	base, baseErr := b.builder.Prepare(ctx, in)
-	if baseErr != nil && !errors.Is(baseErr, ErrBudgetExceeded) {
-		return Prepared{}, baseErr
-	}
-	limit, _ := in.Budget.InputLimit() // Builder 已校验预算。
-	threshold := (limit/100)*b.policy.ThresholdPercent + ((limit%100)*b.policy.ThresholdPercent+99)/100
-	if baseErr == nil && base.EstimatedTokens < threshold {
-		return base, nil
-	}
-	fallback := func(err error) (Prepared, error) {
-		if e := ctx.Err(); e != nil {
-			return Prepared{}, e
-		}
-		if baseErr == nil {
-			return base, nil
-		}
+	base, err := b.builder.Prepare(ctx, in)
+	if err != nil {
 		return Prepared{}, err
 	}
+	fallback := func() (Prepared, error) {
+		if err := ctx.Err(); err != nil {
+			return Prepared{}, err
+		}
+		return base, nil
+	}
+	// 最新一次响应未报告用量时不回退到旧响应或本地估算，不累加历史用量。
+	var promptTokens int32
+	for i := len(in.History) - 1; i >= 0; i-- {
+		if in.History[i].Role == domain.RoleAssistant {
+			promptTokens = in.History[i].PromptTokens
+			break
+		}
+	}
+	// 向上取整保证达到指定比例才触发；拆分整数运算避免大上下文上限溢出。
+	window, percent := b.policy.WindowTokens, int64(b.policy.ThresholdPercent)
+	threshold := window/100*percent + (window%100*percent+99)/100
+	if int64(promptTokens) < threshold {
+		return fallback()
+	}
 	if through == 0 || (previous != nil && (through < previous.ThroughSequence || (through == previous.ThroughSequence && in.Snapshot != nil))) {
-		return fallback(baseErr)
+		return fallback()
 	}
 	// 没有可替换的普通 assistant 消息时，摘要只会增加开销，直接保持原输入。
 	removable := false
@@ -122,7 +122,7 @@ func (b *CompressingBuilder) Prepare(ctx context.Context, in Input) (Prepared, e
 		}
 	}
 	if !removable {
-		return fallback(baseErr)
+		return fallback()
 	}
 	version := int64(0)
 	archiveValid := in.ArchiveCompleted
@@ -155,26 +155,30 @@ func (b *CompressingBuilder) Prepare(ctx context.Context, in Input) (Prepared, e
 		}
 		prefix = source
 	}
-	text, err := summarizeSegments(ctx, b.summary, cloneMessages(prefix))
+	text, err := b.summary.Summarize(ctx, cloneMessages(prefix))
 	if err != nil {
-		return fallback(err)
+		return fallback()
 	}
 	if strings.TrimSpace(text) == "" {
-		return fallback(invalid("context.summary"))
+		return fallback()
 	}
-	next := domain.ContextSnapshot{Scope: in.Session.Scope, ID: "context-" + in.RunID, SessionID: in.Session.ID,
-		ThroughSequence: through, ValidatedThrough: through, Archived: archiveValid, Summary: text, PolicyVersion: in.PolicyVersion, Version: version + 1}
+	next := domain.ContextSnapshot{
+		Scope:            in.Session.Scope,
+		ID:               "context-" + in.RunID,
+		SessionID:        in.Session.ID,
+		ThroughSequence:  through,
+		ValidatedThrough: through,
+		Archived:         archiveValid,
+		Summary:          text,
+		PolicyVersion:    in.PolicyVersion,
+		Version:          version + 1,
+	}
 	in.Snapshot = &next
 	prepared, err := b.builder.Prepare(ctx, in)
 	if err != nil {
-		return fallback(err)
-	}
-	// 摘要不减小上下文时不保存派生噪声；仍必须遵守原有输入预算。
-	if baseErr == nil && prepared.EstimatedTokens >= base.EstimatedTokens {
-		return base, nil
+		return fallback()
 	}
 	next.Version = version
-	next.TokenEstimate = prepared.EstimatedTokens
 	prepared.NewSnapshot = &next
 	return prepared, nil
 }

@@ -56,4 +56,7 @@ type Message struct {
 	Role      Role
 	Parts     []Part
 	CreatedAt time.Time
+	// PromptTokens 是该次 LLM 响应报告的输入用量；零表示未报告，不进行本地估算。
+	// 可选字段保持旧消息和旧事务回执的 BSON 编码不变。
+	PromptTokens int32 `bson:"prompttokens,omitempty"`
 }

@@ -118,7 +118,8 @@ func TestAcceptanceTaskRestartReplay(t *testing.T) {
 		}
 		cfg := config.Defaults()
 		cfg.MongoDB.URI = opts.URI
-		cfg.Agent.Provider, cfg.Agent.Model, cfg.Agent.BaseURL, cfg.Agent.APIKey, cfg.Agent.TokenEncoding = "openai", "test-model", model.URL, "test-key", "o200k_base"
+		cfg.Agent.WindowTokens = 32768
+		cfg.Agent.Provider, cfg.Agent.Model, cfg.Agent.BaseURL, cfg.Agent.APIKey = "openai", "test-model", model.URL, "test-key"
 		a, err := app.NewOpenAIService(ctx, database, cfg, nil, app.Options{Registry: catalog, LeaseDuration: 3 * time.Second, PollInterval: 20 * time.Millisecond, Tasks: config.Tasks{PollInterval: 20 * time.Millisecond, ReconnectBackoff: 20 * time.Millisecond, ObservationTimeout: time.Second}}, adk.ToolOptions{Registry: catalog, MaxModelCalls: 4})
 		if err != nil {
 			t.Fatal(err)

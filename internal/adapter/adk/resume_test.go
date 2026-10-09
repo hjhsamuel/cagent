@@ -53,7 +53,7 @@ func TestResumeAtomicBoundaryAndRestart(t *testing.T) {
 		}
 	})
 	makeRuntime := func() *Runtime {
-		r, e := New(m, countFunc(fixedCounter), budget(), ToolOptions{Registry: catalog, MaxModelCalls: 4})
+		r, e := New(m, ToolOptions{Registry: catalog, MaxModelCalls: 4})
 		if e != nil {
 			t.Fatal(e)
 		}

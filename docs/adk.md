@@ -4,7 +4,7 @@ P6 的代码、真实 ADK SDK 行为测试、本地 HTTP 协议测试及 MongoDB
 
 ## 依赖与装配
 
-锁定 `google.golang.org/adk/v2 v2.4.0`、`google.golang.org/genai v1.71.0`、`github.com/openai/openai-go/v3 v3.66.0`、`github.com/tiktoken-go/tokenizer v0.8.1`。GenAI 仅用作 ADK 消息类型，本实现不调用 Gemini。
+锁定 `google.golang.org/adk/v2 v2.4.0`、`google.golang.org/genai v1.71.0`、`github.com/openai/openai-go/v3 v3.66.0`。GenAI 仅用作 ADK 消息类型，本实现不调用 Gemini。
 
 通过 `app.NewOpenAIService(parent, db, cfg, system, lifecycle)` 组合 P4 生命周期、P5 上下文准备、ADK Runner/LLMAgent 和 OpenAI 客户端。`parent` 是服务生命周期，`system` 必须来自可信配置；数据库应已连接并完成索引初始化。构造过程不会调用模型。租约与轮询仍使用 `app.Options`；该工厂不允许覆盖已装配的 Prepare/Recover 回调。测试或后续提供方可通过 `NewADKService` 注入 ADK Runtime。
 
@@ -14,11 +14,11 @@ ADK 自带 OpenAI 适配采用 Responses，本项目按用户要求使用 Chat C
 
 生产启动时从 MongoDB models 集合读取模型、地址、供应商分类、加权加密 API key 列表及模型选项。创建会话时用户选择模型 _id；未指定则随机选择，没有默认模型。主对话模型与加权抽取的 API key 持久绑定到会话，子分支和摘要独立随机选择。Provider 仅分类，调用统一使用 OpenAI 兼容接口，模型文档不含 protocol 字段；主对话后续请求使用已绑定 key，子分支恢复使用其检查点绑定，深度思考参数由文档配置。AES-GCM 密钥通过版本化环境 keyring 注入，旧明文模型环境变量不再读取。完整结构、工具和轮换步骤见 [MongoDB 模型配置](models.md)。配置是启动时的只读快照，更换配置需重启实例。测试仍可直接构造 Agent 快照。
 
-兼容端必须支持所选限额字段、文本 Chat Completions SSE 和 `stream_options.include_usage`。不同厂商的非标准扩展不自动兼容。禁止 HTTP 重定向，避免凭据跟随到另一地址；SDK 自动重试关闭，避免提交结果不确定时重复生成。错误的公开文本为稳定说明；原始 SDK 原因只供内部 `errors.Is/As` 诊断，不可直接打印。
+兼容端必须支持文本 Chat Completions SSE 和 `stream_options.include_usage`。主对话与摘要不计算 Token 预算，也不发送 `max_tokens` 或 `max_completion_tokens`。不同厂商的非标准扩展不自动兼容。禁止 HTTP 重定向，避免凭据跟随到另一地址；SDK 自动重试关闭，避免提交结果不确定时重复生成。错误的公开文本为稳定说明；原始 SDK 原因只供内部 `errors.Is/As` 诊断，不可直接打印。
 
-计数器使用指定 BPE 对实际发送的消息 JSON 计数，并加入固定及每消息封装余量。P5 准备与 ADK BeforeModel 使用相同映射，执行前再次检查预算，避免 SDK 增补内容绕过预算。工具历史保持结构化角色和参数，超过 float64 精确范围的整数保持原文；工具 CallID 按原 Run 与局部 ID 映射，领域任务路由不变。
+P5 准备与 ADK BeforeModel 使用相同消息映射，系统指令和历史只发送一次；工具历史保持结构化角色和参数，超过 float64 精确范围的整数保持原文。工具 CallID 按原 Run 与局部 ID 映射，领域任务路由不变。
 
-该计数是估算，不能保证任意兼容模型采用相同 tokenizer 或消息封装。部署时必须设置实际窗口、输出预留和安全余量；不支持的编码需另加计数器。真实冒烟通过服务端 usage 检查该次请求估算与安全余量，不能替代全量语料校准。参见 [官方 Token 计数说明](https://developers.openai.com/cookbook/examples/how_to_count_tokens_with_tiktoken)。超预算明确失败，不静默裁剪。
+输入不进行本地 Token 计数、窗口校验或裁剪。模型响应中的 usage 保留为事件元数据，prompt_tokens 同事务随完整 assistant 消息持久化。下一轮准备时，最新响应的输入用量达到主模型 `config.window_tokens` 的 80%（可通过 `CAGENT_CONTEXT_COMPRESSION_THRESHOLD_PERCENT` 配置比例）才尝试自动摘要；缺失用量不估算、不累加或沿用旧响应用量。近期轮数只决定摘要范围。
 
 ## 输出、隔离与故障边界
 
@@ -38,7 +38,7 @@ ADK 自带 OpenAI 适配采用 Responses，本项目按用户要求使用 Chat C
 
 ## 验证方式
 
-本地测试覆盖动态 URL/模型/密钥、两种输出限额、SSE/usage、429 不重试、超时/取消、截断/拒绝/工具输出、禁止重定向、错误脱敏、并发隔离、预算及整数精度。应用集成使用真实临时 MongoDB 副本集，覆盖输入到持久输出、幂等重放、完成检查点恢复、失败无完整消息和无检查点。
+本地测试覆盖动态 URL/模型/密钥、不发送 Token 限额、长输入、SSE/usage、429 不重试、超时/取消、截断/拒绝/工具输出、禁止重定向、错误脱敏、并发隔离及整数精度。应用集成使用真实临时 MongoDB 副本集，覆盖输入到持久输出、幂等重放、完成检查点恢复、失败无完整消息和无检查点。
 
 ```powershell
 $env:CAGENT_TEST_MONGOD = (Resolve-Path .local/mongodb/*/bin/mongod.exe).Path
@@ -55,4 +55,4 @@ $env:CAGENT_TEST_MODEL = '1'
 go test ./internal/adapter/adk -run '^TestRealOpenAISmoke$' -count=1 -v
 ```
 
-此测试会实际调用模型并可能计费，使用配置的输出预算及超时，只检查最终回复和 usage，不打印提示词、回复、地址或密钥。未显式启用时跳过。当前尚无真实模型凭据，因此该项验收未通过也未声称通过；无需在聊天中提供密钥。
+此测试会实际调用模型并可能计费，使用配置的请求超时，只检查最终回复和 usage，不打印提示词、回复、地址或密钥。未显式启用时跳过。当前尚无真实模型凭据，因此该项验收未通过也未声称通过；无需在聊天中提供密钥。

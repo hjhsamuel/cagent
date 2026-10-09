@@ -123,7 +123,7 @@ func TestMongoSnapshotRetryAndFailedResult(t *testing.T) {
 		t.Fatal("transaction retry advanced the run more than once")
 	}
 	next = saved
-	next.TokenEstimate++
+	next.Summary += " updated"
 	guard.RunVersion = run.Version
 	injected := errors.New("injected commit rejection")
 	db.beforeCommit = func(name string) error {

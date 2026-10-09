@@ -31,7 +31,7 @@ func TestSharedModelCapacityAndEarlyConsumerRelease(t *testing.T) {
 	gate := observability.NewGate(1)
 	m.SetCapacity(gate)
 	summary.SetCapacity(gate)
-	mapped, _ := mapMessages(request("u").Messages, m.Name(), 12)
+	mapped, _ := mapMessages(request("u").Messages, m.Name())
 	hold, _ := gate.Try(context.Background())
 	for _, client := range []*OpenAIModel{m, summary} {
 		var got error

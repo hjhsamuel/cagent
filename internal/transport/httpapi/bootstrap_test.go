@@ -43,7 +43,7 @@ func TestProductionBootstrapStartStopAndOccupiedPort(t *testing.T) {
 		t.Fatal("could not connect model fixture")
 	}
 	defer provision.Disconnect(context.Background())
-	doc := schema.Model{ID: "test-model", Model: "test-model", Provider: "GLM", BaseURL: "http://127.0.0.1:1/v1", APIKeys: []schema.EncryptedKey{key}, Options: schema.ModelConfig{TokenEncoding: "o200k_base", MaxTokensField: "max_tokens", RequestTimeout: "2m", WindowTokens: 8192, OutputTokens: 2048}}
+	doc := schema.Model{ID: "test-model", Model: "test-model", Provider: "GLM", BaseURL: "http://127.0.0.1:1/v1", APIKeys: []schema.EncryptedKey{key}, Options: schema.ModelConfig{WindowTokens: 32768, RequestTimeout: "2m"}}
 	if _, err := provision.Database(dbCfg.Database).Collection(mongodb.ModelCollection).InsertOne(context.Background(), doc); err != nil {
 		t.Fatal("could not provision model fixture")
 	}

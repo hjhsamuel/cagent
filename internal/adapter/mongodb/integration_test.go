@@ -432,7 +432,7 @@ func TestMongoSnapshotsAndRecoveryScan(t *testing.T) {
 	db, cfg := testDatabase(t)
 	ctx := context.Background()
 	_, g := startFixture(t, db)
-	snap := domain.ContextSnapshot{Scope: testScope, ID: "snapshot", SessionID: "session", ThroughSequence: 1, Summary: "summary", TokenEstimate: 1, PolicyVersion: "v1"}
+	snap := domain.ContextSnapshot{Scope: testScope, ID: "snapshot", SessionID: "session", ThroughSequence: 1, Summary: "summary", PolicyVersion: "v1"}
 	saved, err := db.SaveSnapshot(ctx, g, snap, 0, 2)
 	check(t, err)
 	if saved.Version != 1 {

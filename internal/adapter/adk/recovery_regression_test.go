@@ -48,7 +48,7 @@ func TestRegressionAsyncIntegerRoundTrip(t *testing.T) {
 			yield(finalResponse("done", 1, 1), nil)
 		}
 	})
-	r, e := New(m, countFunc(fixedCounter), budget(), ToolOptions{Registry: catalog, MaxModelCalls: 4})
+	r, e := New(m, ToolOptions{Registry: catalog, MaxModelCalls: 4})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -94,13 +94,12 @@ func TestRegressionCancelledToolHistory(t *testing.T) {
 		msg("old-call", "old", 2, domain.RoleAssistant, []domain.Part{{Kind: domain.PartToolCall, ToolCallID: "one", ToolName: "remote", Data: []byte(`{}`)}}),
 		msg("new-input", "new", 3, domain.RoleUser, []domain.Part{{Kind: domain.PartText, Text: "new question"}}),
 	}
-	r := runtimeFor(t, modelFunc(func(context.Context, *model.LLMRequest, bool) iter.Seq2[*model.LLMResponse, error] { return nil }), countFunc(fixedCounter))
-	builder, _ := contextengine.New(r)
-	prepared, e := builder.Prepare(context.Background(), contextengine.Input{Session: s, RunID: "new", PolicyVersion: "v1", History: history, RunStates: map[string]domain.RunStatus{"old": domain.RunCancelled}, Budget: budget()})
+	builder := contextengine.New()
+	prepared, e := builder.Prepare(context.Background(), contextengine.Input{Session: s, RunID: "new", PolicyVersion: "v1", History: history, RunStates: map[string]domain.RunStatus{"old": domain.RunCancelled}})
 	if e != nil {
 		t.Fatal(e)
 	}
-	mapped, e := mapMessages(prepared.Messages, "test-model", 256)
+	mapped, e := mapMessages(prepared.Messages, "test-model")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -127,7 +126,7 @@ func TestRegressionMixedTaskAndFailure(t *testing.T) {
 			yield(&model.LLMResponse{Content: &genai.Content{Role: "model", Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "good", Name: "remote", Args: map[string]any{}}}, {FunctionCall: &genai.FunctionCall{ID: "bad", Name: "remote", Args: map[string]any{}}}}}}, nil)
 		}
 	})
-	r, _ := New(m, countFunc(fixedCounter), budget(), ToolOptions{Registry: catalog, MaxModelCalls: 4})
+	r, _ := New(m, ToolOptions{Registry: catalog, MaxModelCalls: 4})
 	tracked := 0
 	var checkpoint *domain.Checkpoint
 	e := r.Execute(context.Background(), req, func(_ context.Context, u agent.Update) error {

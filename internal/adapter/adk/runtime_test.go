@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"iter"
-	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,7 +14,6 @@ import (
 
 	appagent "github.com/hjhsamuel/cagent/internal/agent"
 	"github.com/hjhsamuel/cagent/internal/apperrors"
-	"github.com/hjhsamuel/cagent/internal/contextengine"
 	"github.com/hjhsamuel/cagent/internal/domain"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
@@ -28,12 +26,6 @@ func (f modelFunc) GenerateContent(c context.Context, r *model.LLMRequest, s boo
 	return f(c, r, s)
 }
 
-type countFunc func(context.Context, *model.LLMRequest) (int, error)
-
-func (f countFunc) CountRequest(c context.Context, r *model.LLMRequest) (int, error) { return f(c, r) }
-func budget() contextengine.Budget {
-	return contextengine.Budget{WindowTokens: 4096, OutputTokens: 256, SafetyTokens: 64}
-}
 func request(user string) appagent.Request {
 	scope := domain.Scope{TenantID: "tenant", UserID: user}
 	run := domain.Run{Scope: scope, ID: "run", SessionID: "session", Status: domain.RunRunning, Version: 2}
@@ -42,31 +34,26 @@ func request(user string) appagent.Request {
 	}
 	return appagent.Request{Run: run, Caller: domain.AgentExecution{AgentID: "configured-agent", InvocationID: "inv", ParentInvocationID: "parent"}, Messages: []domain.Message{m("system", domain.RoleSystem, "rules"), m("old", domain.RoleAssistant, "history"), m("input", domain.RoleUser, user)}}
 }
-func runtimeFor(t *testing.T, m model.LLM, c RequestCounter) *Runtime {
+func runtimeFor(t *testing.T, m model.LLM) *Runtime {
 	t.Helper()
-	r, e := New(m, c, budget())
+	r, e := New(m)
 	if e != nil {
 		t.Fatal(e)
 	}
 	return r
 }
-func fixedCounter(context.Context, *model.LLMRequest) (int, error) { return 10, nil }
 
 // 经过真实 ADK Runner/LLMAgent，验证 callback 替换后的系统/历史恰好一次，增量不写历史。
 func TestExecuteFinalCheckpointAndIdentity(t *testing.T) {
 	req := request("user")
 	var calls atomic.Int32
-	var counted *model.LLMRequest
 	m := modelFunc(func(ctx context.Context, r *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
 		return func(yield func(*model.LLMResponse, error) bool) {
 			calls.Add(1)
 			if !stream {
 				t.Error("streaming disabled")
 			}
-			if !reflect.DeepEqual(r, counted) {
-				t.Error("request changed after count")
-			}
-			if len(r.Contents) != 2 || r.Config.SystemInstruction.Parts[0].Text != "rules" || r.Contents[1].Parts[0].Text != "user" || r.Config.MaxOutputTokens != 256 {
+			if len(r.Contents) != 2 || r.Config.SystemInstruction.Parts[0].Text != "rules" || r.Contents[1].Parts[0].Text != "user" || r.Config.MaxOutputTokens != 0 {
 				t.Error("history/config mismatch")
 			}
 			for _, text := range []string{"你", "好"} {
@@ -77,12 +64,7 @@ func TestExecuteFinalCheckpointAndIdentity(t *testing.T) {
 			yield(finalResponse("你好", 11, 2), nil)
 		}
 	})
-	c := countFunc(func(_ context.Context, r *model.LLMRequest) (int, error) {
-		data, _ := json.Marshal(r)
-		json.Unmarshal(data, &counted)
-		return 10, nil
-	})
-	runtime := runtimeFor(t, m, c)
+	runtime := runtimeFor(t, m)
 	var updates []appagent.Update
 	if e := runtime.Execute(context.Background(), req, func(_ context.Context, u appagent.Update) error { updates = append(updates, u); return nil }); e != nil {
 		t.Fatal(e)
@@ -141,7 +123,7 @@ func TestFailureCancellationAndEmitBackpressure(t *testing.T) {
 			}
 		}
 	})
-	runtime := runtimeFor(t, m, countFunc(fixedCounter))
+	runtime := runtimeFor(t, m)
 	if e := runtime.Execute(context.Background(), request("u"), func(context.Context, appagent.Update) error { return sentinel }); !errors.Is(e, sentinel) {
 		t.Fatal(e)
 	}
@@ -158,7 +140,7 @@ func TestFailureCancellationAndEmitBackpressure(t *testing.T) {
 						yield(response, nil)
 					}
 				}
-			}), countFunc(fixedCounter))
+			}))
 			if e := r.Execute(context.Background(), request("u"), func(context.Context, appagent.Update) error { t.Error("invalid final emitted"); return nil }); e == nil {
 				t.Fatal("false success")
 			}
@@ -168,13 +150,13 @@ func TestFailureCancellationAndEmitBackpressure(t *testing.T) {
 	defer cancel()
 	r := runtimeFor(t, modelFunc(func(c context.Context, _ *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
 		return func(yield func(*model.LLMResponse, error) bool) { <-c.Done(); yield(nil, c.Err()) }
-	}), countFunc(fixedCounter))
+	}))
 	if e := r.Execute(ctx, request("u"), func(context.Context, appagent.Update) error { return nil }); !errors.Is(e, context.DeadlineExceeded) {
 		t.Fatal(e)
 	}
 }
 
-func TestBudgetScopeAndConcurrentRuns(t *testing.T) {
+func TestScopeAndConcurrentRuns(t *testing.T) {
 	var calls atomic.Int32
 	m := modelFunc(func(c context.Context, r *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
 		return func(yield func(*model.LLMResponse, error) bool) {
@@ -182,10 +164,7 @@ func TestBudgetScopeAndConcurrentRuns(t *testing.T) {
 			yield(finalResponse(r.Contents[len(r.Contents)-1].Parts[0].Text, 1, 1), nil)
 		}
 	})
-	r := runtimeFor(t, m, countFunc(func(context.Context, *model.LLMRequest) (int, error) { return 10000, nil }))
-	if e := r.Execute(context.Background(), request("u"), func(context.Context, appagent.Update) error { return nil }); !errors.Is(e, contextengine.ErrBudgetExceeded) {
-		t.Fatal(e)
-	}
+	r := runtimeFor(t, m)
 	req := request("u")
 	req.Messages[1].Scope.UserID = "foreign"
 	if e := r.Execute(context.Background(), req, func(context.Context, appagent.Update) error { return nil }); !errors.Is(e, apperrors.ErrInvalidArgument) {
@@ -194,7 +173,7 @@ func TestBudgetScopeAndConcurrentRuns(t *testing.T) {
 	if calls.Load() != 0 {
 		t.Fatal("unsafe model call")
 	}
-	r = runtimeFor(t, m, countFunc(fixedCounter))
+	r = runtimeFor(t, m)
 	var wg sync.WaitGroup
 	for i := 0; i < 12; i++ {
 		wg.Add(1)
@@ -225,7 +204,7 @@ func TestStructuredMappingAndSafeErrors(t *testing.T) {
 	result.Role = domain.RoleTool
 	result.Parts = []domain.Part{{Kind: domain.PartToolResult, ToolCallID: "a", Text: "untrusted"}}
 	req.Messages = []domain.Message{req.Messages[0], call, result, req.Messages[2]}
-	mapped, e := mapMessages(req.Messages, "test", 10)
+	mapped, e := mapMessages(req.Messages, "test")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -254,11 +233,11 @@ func TestStructuredMappingAndSafeErrors(t *testing.T) {
 			yield(finalResponse("ok", 1, 1), nil)
 		}
 	})
-	if err := runtimeFor(t, m, countFunc(fixedCounter)).Execute(context.Background(), req, func(context.Context, appagent.Update) error { return nil }); err != nil {
+	if err := runtimeFor(t, m).Execute(context.Background(), req, func(context.Context, appagent.Update) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	req.Messages[0].Parts[0].URI = "file://unsupported"
-	if _, e = mapMessages(req.Messages, "test", 10); !errors.Is(e, apperrors.ErrUnsupported) {
+	if _, e = mapMessages(req.Messages, "test"); !errors.Is(e, apperrors.ErrUnsupported) {
 		t.Fatal(e)
 	}
 	cause := errors.New("secret credential and prompt")

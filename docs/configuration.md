@@ -31,23 +31,19 @@ API 登录接口 `POST /api/v1/auth/login` 无需鉴权，不校验账号密码�
 | `CAGENT_TASKS_POLL_INTERVAL` | `tasks.poll_interval` | `2s` | 正时间间隔 |
 | `CAGENT_TASKS_OBSERVATION_TIMEOUT` | `tasks.observation_timeout` | `30s` | 正时间间隔，仅限制单次观察 |
 | `CAGENT_TASKS_RECONNECT_BACKOFF` | `tasks.reconnect_backoff` | `1s` | 正时间间隔 |
-| `CAGENT_CONTEXT_WINDOW_TOKENS` | `context.window_tokens` | `8192` | 正整数，大于全部预留之和 |
-| `CAGENT_CONTEXT_OUTPUT_TOKENS` | `context.output_tokens` | `2048` | 正整数 |
-| `CAGENT_CONTEXT_TOOL_TOKENS` | `context.tool_tokens` | `1024` | 非负整数，可设为 0 |
-| `CAGENT_CONTEXT_SAFETY_TOKENS` | `context.safety_tokens` | `512` | 非负整数，可设为 0 |
 | `CAGENT_CONTEXT_POLICY_VERSION` | `context.policy_version` | `v1` | 非空白 |
 
 时间使用 Go duration 语法，如 `500ms`、`1.5s`、`1m30s`；不接受无单位正数、空值、溢出、零或负数。整数使用十进制并受当前平台 int 范围约束，不接受小数、十六进制或溢出。
 
 HTTP 可使用 `:8080`（所有网卡）、`localhost:8080`、`[::1]:8080` 或含 zone 的 IPv6 地址。主机名限 ASCII 标签，端口不接受服务名或 0。这里只检查形状，不解析 DNS 或探测端口，无法证明地址属于本机或可以监听。
 
-输入预算为 WindowTokens − OutputTokens − ToolTokens − SafetyTokens，必须至少剩余一个 Token。校验采用逐项比较、扣减，避免预留之和溢出。默认预算不是任何特定模型的能力声明，必须结合真实模型窗口调整。ObservationTimeout 不限制远端任务寿命；轮询间隔、观察超时和重连等待之间没有额外大小关系。
+上下文不计算 Token 预算，不设置模型输出 Token 限额。ObservationTimeout 不限制远端任务寿命；轮询间隔、观察超时和重连等待之间没有额外大小关系。
 
 ## 错误与安全边界
 
 错误统一归为 `apperrors.ErrInvalidArgument`，可通过 `errors.As` 提取 `*apperrors.Error` 的字段路径及安全说明。标准数字/时间/地址解析错误可能携带输入值，本模块不保留这些原始原因；输出及原因链均不回显输入。不要把 Config、MongoDB.URI 或整个进程环境写入日志，也不要直接序列化为响应。
 
-MongoDB 配置只要求 URI 和 Database 非空白，实际连接、认证、数据库名称限制及事务拓扑由 P3 适配器验证。模型文档的 Provider 只用于分类，不含 protocol 字段；调用统一使用 OpenAI 兼容接口，加载后校验 API 地址、编码、输出限额字段和超时；密钥池与 AES 密钥延迟到使用时校验。配置成功不代表实际模型可用；APIKey 与 MongoDB URI 一样禁止整体打印。
+MongoDB 配置只要求 URI 和 Database 非空白，实际连接、认证、数据库名称限制及事务拓扑由 P3 适配器验证。模型文档的 Provider 只用于分类，不含 protocol 字段；调用统一使用 OpenAI 兼容接口，加载后校验 API 地址和超时；密钥池与 AES 密钥延迟到使用时校验。配置成功不代表实际模型可用；APIKey 与 MongoDB URI 一样禁止整体打印。
 
 ## 示例及后续接入
 
@@ -55,7 +51,7 @@ MongoDB 配置只要求 URI 和 Database 非空白，实际连接、认证、数
 
 P6 阶段配置项已扩展；当前完整清单包含下述 P7 配置。P1.4 使用 Logrus 默认实例及 Lumberjack 文本文件轮转，CAGENT_LOG_FORMAT 已移除，详情见 [日志约定](logging.md)。日志选项可单独加载。P6 模型错误不展开敏感 SDK 诊断，但这不等于全局敏感日志过滤已完成。动态配置按服务实例快照使用，详见 [ADK 接入说明](adk.md)。
 
-P5 已通过 contextengine.Budget 消费四个 Token 预算字段；PolicyVersion 用于检查持久摘要与当前策略是否兼容。装配时通过 app.NewContextPreparer 传入匹配模型的 TokenCounter 和可信系统约束，超预算明确报错。默认数字不代表真实模型窗口；P6 验证实际计数能力，P10.1 已实现摘要生成及有界回退。详见 [上下文说明](context.md)。
+PolicyVersion 用于检查持久摘要与当前策略是否兼容。app.NewContextPreparer 组装可信系统约束和会话历史，校验消息与工具关联；自动摘要依据最新 LLM 报告的 prompt_tokens 达到阈值触发，失败时保留原输入。详见 [上下文说明](context.md)。
 
 
 ## P7 HTTP 与 JWT 配置
@@ -86,14 +82,13 @@ P5 已通过 contextengine.Budget 消费四个 Token 预算字段；PolicyVersio
 
 | 环境变量 | 默认值 | 约束及用途 |
 | --- | --- | --- |
-| `CAGENT_CONTEXT_COMPRESSION_THRESHOLD_PERCENT` | `80` | 0 禁用；1–100 为可用输入预算的触发百分比，达到阈值即尝试 |
+| `CAGENT_CONTEXT_COMPRESSION_ENABLED` | `true` | 是否依据 LLM 返回的 prompt_tokens 生成摘要 |
+| `CAGENT_CONTEXT_COMPRESSION_THRESHOLD_PERCENT` | `80` | 最新 assistant 响应报告的 prompt_tokens 占主模型 config.window_tokens 的触发百分比，启用时为 1–100；缺失用量不触发 |
 | `CAGENT_CONTEXT_KEEP_RECENT_ROUNDS` | `2` | 启用时至少 1，包含当前用户轮次；全部用户原文和工具消息额外保留 |
-| `CAGENT_CONTEXT_SUMMARY_WINDOW_TOKENS` | `8192` | 必须大于摘要输出与 Context.SafetyTokens 之和 |
-| `CAGENT_CONTEXT_SUMMARY_OUTPUT_TOKENS` | `512` | 正数且不超过 int32；传给摘要模型输出限额字段 |
 
-沿用 `CAGENT_CONTEXT_POLICY_VERSION`（默认 v1）标记生成策略，修改摘要模型、提示词、保留规则时应提升版本。版本变化从原始历史重建，不继续使用不兼容旧摘要。摘要模型和 key 独立随机选择，从所选 MongoDB 文档加载 Provider、地址、加权密钥池、超时和输出限额字段。模型文档覆盖摘要编码和窗口；输出预算受文档上限约束。摘要模型实际窗口及编码必须由部署者确认，默认预算不代表任意模型的能力。
+沿用 `CAGENT_CONTEXT_POLICY_VERSION`（默认 v1）标记生成策略，修改摘要模型、提示词、保留规则时应提升版本。版本变化从原始历史重建，不继续使用不兼容旧摘要。摘要模型和 key 独立随机选择，从所选 MongoDB 文档加载 Provider、地址、加权密钥池和超时。
 
-摘要输入必须先通过预算；兼容快照使用增量摘要，预算拒绝时允许有界分段，模型/网络错误不重试。失败只回退到预算合格的输入。完整环境键清单以 .env.example 为准；归档选项及维护期限见 [修复说明](remediation.md)。
+最新 LLM 响应的 `prompt_tokens` 达到主模型 `config.window_tokens` 的 `CAGENT_CONTEXT_COMPRESSION_THRESHOLD_PERCENT` 百分比，且历史超过 `CAGENT_CONTEXT_KEEP_RECENT_ROUNDS`、存在可替换的早期消息时，在下一轮准备中尝试一次摘要；兼容快照使用增量摘要，失败或空摘要时回退到旧快照/原文输入，不分段或重试。已移除的 Token 预算与固定 Token 阈值环境变量不再读取。完整环境键清单以 .env.example 为准；归档选项及维护期限见 [修复说明](remediation.md)。
 
 ## P10.2 容量与运维入口
 
@@ -109,4 +104,4 @@ P5 已通过 contextengine.Budget 消费四个 Token 预算字段；PolicyVersio
 
 ## 模型加密与加载
 
-服务启动时无须配置 AES 密钥；仅调用 `POST /debug/model-keys/rotate` 时由服务自动生成默认 32 字节密钥。服务将其以 `CAGENT_MODEL_ENCRYPTION_KEY_V<正整数>` 保存到 `.env`，重启后加载，每个变量只保存对应版本的 Base64 AES 密钥，新密文自动使用最大数字版本。首次添加模型前须先调用轮换接口；已有模型须保留能解密旧密文的密钥。算法固定为 AES-GCM，支持多版本密钥并存；完整文档和迁移步骤见 [MongoDB 模型配置](models.md)。每次运行的窗口/输出预算、摘要编码/窗口由所选模型文档确定。
+服务启动时无须配置 AES 密钥；仅调用 `POST /debug/model-keys/rotate` 时由服务自动生成默认 32 字节密钥。服务将其以 `CAGENT_MODEL_ENCRYPTION_KEY_V<正整数>` 保存到 `.env`，重启后加载，每个变量只保存对应版本的 Base64 AES 密钥，新密文自动使用最大数字版本。首次添加模型前须先调用轮换接口；已有模型须保留能解密旧密文的密钥。算法固定为 AES-GCM，支持多版本密钥并存；完整文档和迁移步骤见 [MongoDB 模型配置](models.md)。模型文档不再包含 Token 编码、窗口或输出预算。

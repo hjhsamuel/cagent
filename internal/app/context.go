@@ -14,10 +14,8 @@ import (
 )
 
 // ContextOptions 来自可信装配配置。System 为固定约束，不能使用用户或工具文本填充。
-// Budget 字段对应 config.Context；计数器与模型的实际窗口匹配由 P6 装配负责。
 type ContextOptions struct {
 	System        []domain.Part
-	Budget        contextengine.Budget
 	PolicyVersion string
 	// PreserveUsers 保护旧摘要覆盖范围中的用户原文；生产 ADK 装配始终开启，
 	// 即使临时禁用新摘要生成，也不能因沿用旧快照而丢失用户要求。
@@ -28,16 +26,12 @@ type ContextOptions struct {
 	Summarizer  contextengine.Summarizer
 }
 
-// NewContextPreparer 创建可直接赋给 Options.Prepare 的预算化请求准备函数。
-// 保留 P4 Prepare 扩展点，不在 app 内构造模型计数器；P6 必须显式接入本函数或
-// 等价的预算化准备流程。默认原始历史路径仅用于 P4 替身，不代表已受预算保护。
+// NewContextPreparer 创建可直接赋给 Options.Prepare 的请求准备函数。
+// 保留历史、快照和工具关联校验，不计算 Token 预算。
 // 系统内容在构造时深拷贝，此后各次调用再次独立复制，避免用户之间共享可变消息。
 func NewContextPreparer(db *mongodb.Database, engine contextengine.Engine, opts ContextOptions) (func(context.Context, domain.Run) (agent.Request, error), error) {
 	if db == nil || engine == nil || strings.TrimSpace(opts.PolicyVersion) == "" {
 		return nil, invalid("context.options")
-	}
-	if _, err := opts.Budget.InputLimit(); err != nil {
-		return nil, err
 	}
 	system := copyParts(opts.System)
 	return func(ctx context.Context, run domain.Run) (agent.Request, error) {
@@ -48,7 +42,7 @@ func NewContextPreparer(db *mongodb.Database, engine contextengine.Engine, opts 
 		if err != nil {
 			return agent.Request{}, err
 		}
-		in := contextengine.Input{Session: session, RunID: run.ID, Budget: opts.Budget, PolicyVersion: opts.PolicyVersion, PreserveUsers: opts.PreserveUsers, ArchiveCompleted: opts.ArchiveCompleted}
+		in := contextengine.Input{Session: session, RunID: run.ID, PolicyVersion: opts.PolicyVersion, PreserveUsers: opts.PreserveUsers, ArchiveCompleted: opts.ArchiveCompleted}
 		if system != nil {
 			in.System = []domain.Message{{Scope: run.Scope, ID: "configured-system", SessionID: run.SessionID, Role: domain.RoleSystem, Parts: copyParts(system)}}
 		}

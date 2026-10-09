@@ -6,7 +6,7 @@
 
 1. 准备支持事务的 MongoDB replica set 或 mongos；standalone 启动会被拒绝。生产账号须有业务集合读写、集合/索引初始化及恢复管理查询能力。认证/TLS 通过驱动 URI 设置，连接信息由秘密管理系统注入，禁止写入仓库。拓扑、schema=1、集合和索引清单见 [MongoDB](mongodb.md)。启动自动幂等初始化索引；不兼容索引/排序规则应先排查并备份，不直接删除生产集合。
 2. 依据 [完整配置](configuration.md) 和 [示例](../.env.example) 注入环境变量，或填写当前工作目录的 `.env` 供服务自动加载；已有环境变量优先。示例仍需补齐实际部署配置。设置 MongoDB URI/数据库、监听地址、可写日志路径及关闭宽限期。
-3. 注入模型 provider/model/base URL/API key/token encoding 和窗口预算。摘要模型共用端点和凭据，独立名称/窗口通过摘要配置设置；真实兼容性须先运行外部冒烟。见 [ADK](adk.md)。
+3. 在 MongoDB 模型文档中配置 provider/model/base URL/API key 和请求超时；自动摘要依据 LLM 报告的输入用量触发，摘要独立随机选择模型和凭据。真实兼容性须先运行外部冒烟。见 [ADK](adk.md)。
 4. 配置 JWT 随机密钥（至少 32 字节），算法固定 HS256；可由可信身份服务签发带 tenant_id/sub/exp 的令牌，或调用 `POST /api/v1/auth/login` 生成随机身份 JWT，无须鉴权或账号密码。详见 [登录与 JWT 签发](http.md#登录与-jwt-签发)。JWT 密钥轮转需协调签发方和实例，当前无多密钥过渡机制。仅通过 TLS 入口传输令牌；服务自身没有 HTTPS 监听配置，应由部署方反向代理终止 TLS。
 5. 需要工具时设置 `CAGENT_TOOLS_FILE`；按 [工具清单](tools.example.json) 配置完整租户/用户授权、连接 ID、协议、可信 URL 与工具白名单。`credentials` 的值是环境变量名，环境变量内容为完整 Authorization 头；秘密不写入 JSON。A2A 任务恢复依赖相同 Scope、连接 ID、远端服务和原模型配置，升级时不要更改这些引用或删除旧授权。
 6. 启动二进制，确认 `/healthz` 和 `/readyz` 返回 200，再使用真实 JWT 创建会话/Run 并消费 SSE。路由、DTO、幂等、错误码、暂停补充输入和授权接口见 [HTTP](http.md)。就绪仅证明数据库可达，不证明模型/工具可用。
@@ -36,6 +36,6 @@
 | waiting_tool/observation_error | 查询本地 Task，核对原连接与远端任务；观察失败不代表任务失败，不重复 Execute |
 | input_required/auth_required | 使用原本地任务的 input/authorization 路由；只传预授权 credential_ref，不传凭据、URL 或远端句柄 |
 | execution_outcome_uncertain | 人工核对远端副作用及原调用关联；不能从旧检查点盲目重放 |
-| 上下文超预算/大结果失败 | 核对模型窗口、摘要预算和受保护内容；不要删除工具调用对或用户要求以掩盖超限 |
+| 模型拒绝输入/大结果失败 | 检查供应商错误和工具输出大小；上下文不进行本地 Token 预算计算或裁剪 |
 
 日志字段已脱敏，日志 Message 必须保持固定文本；默认本地轮转。可配置独立诊断凭据访问 `/debug/metrics` 与 `/debug/traces`，普通 JWT 不适用，未配置时不启用。追踪最多 256 条、重启丢失，没有 OTLP 导出；按 request_id/run_id/invocation_id 关联排障，详见 [日志](logging.md) 和 [观测](operations.md)。

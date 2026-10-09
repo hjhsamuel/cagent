@@ -2,7 +2,6 @@ package config
 
 import (
 	"encoding/json"
-	"math"
 	"strings"
 	"time"
 
@@ -64,14 +63,27 @@ func ResolveModelMetadata(d schema.Model, name string) (Agent, error) {
 	if strings.TrimSpace(d.ID) == "" || strings.TrimSpace(d.Provider) == "" {
 		return Agent{}, invalid("model", "model id and provider must not be blank")
 	}
+	if d.Options.WindowTokens <= 0 {
+		return Agent{}, invalid("model.config.window_tokens", "must be the positive model context limit")
+	}
 	timeout, err := time.ParseDuration(d.Options.RequestTimeout)
 	if err != nil {
 		return Agent{}, invalid("model.config.request_timeout", "must be a positive duration")
 	}
-	if d.Options.WindowTokens <= 0 || d.Options.OutputTokens <= 0 || d.Options.OutputTokens > math.MaxInt32 || d.Options.OutputTokens >= d.Options.WindowTokens {
-		return Agent{}, invalid("model.config.window_tokens", "must exceed a positive output limit within int32 range")
+	a := Agent{
+		Name:           name,
+		Provider:       d.Provider,
+		Model:          d.Model,
+		BaseURL:        d.BaseURL,
+		RequestTimeout: timeout,
+		WindowTokens:   d.Options.WindowTokens,
+		Thinking: &Thinking{
+			Enabled: d.Options.Thinking.Enabled,
+			Key:     d.Options.Thinking.Key,
+			Value:   d.Options.Thinking.Value,
+		},
+		APIKey: "validation-only",
 	}
-	a := Agent{Name: name, Provider: d.Provider, Model: d.Model, BaseURL: d.BaseURL, TokenEncoding: d.Options.TokenEncoding, MaxTokensField: d.Options.MaxTokensField, RequestTimeout: timeout, Thinking: &Thinking{Enabled: d.Options.Thinking.Enabled, Key: d.Options.Thinking.Key, Value: d.Options.Thinking.Value}, APIKey: "validation-only"}
 	if err := a.ValidateOpenAI(); err != nil {
 		return Agent{}, err
 	}

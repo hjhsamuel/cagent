@@ -1,6 +1,6 @@
 # 应用服务与持久事件流（P4）
 
-`internal/app.Application` 直接调用 `*mongodb.Database`，实现会话创建/查询、Run 提交/查询/取消、服务内运行生命周期和恢复接入。P5 已提供可注入的预算化准备器；真实模型、HTTP/SSE 编码与启动装配在 P6/P7 实现。
+`internal/app.Application` 直接调用 `*mongodb.Database`，实现会话创建/查询、Run 提交/查询/取消、服务内运行生命周期和恢复接入。P5 已提供可注入的上下文准备器；真实模型、HTTP/SSE 编码与启动装配在 P6/P7 实现。
 
 ## 装配与生命周期
 
@@ -18,7 +18,7 @@
 
 提交失败或响应未知时停止生成并保留持久状态，不盲目产生新的逻辑提交。`DurableEvents.Publish` 接受完整 `store.CommitRunRequest`，调用方可以保留稳定 OperationID/内容重试以读取回执。它替换了原先缺少租约和原子状态边界的 `Publish(Event)` 占位接口。
 
-默认请求准备按页读取原始会话历史（已包含当前输入，不再追加第二份），调用身份默认 AgentID 来自会话、InvocationID 为 Run ID。`Options.Prepare` 可直接注入 P5 的 `NewContextPreparer`，详见 [上下文说明](context.md)；返回的 Run 不得改变、Caller 必须有效。默认路径没有预算控制，仅用于 P4 替身；真实模型装配必须采用预算化准备器，P5 对超预算明确报错。
+默认请求准备按页读取原始会话历史（已包含当前输入，不再追加第二份），调用身份默认 AgentID 来自会话、InvocationID 为 Run ID。`Options.Prepare` 可直接注入 P5 的 `NewContextPreparer`，详见 [上下文说明](context.md)；返回的 Run 不得改变、Caller 必须有效。真实模型装配采用上下文准备器，校验历史与工具关联，不计算 Token 预算。
 
 `RecoverRun(ctx, scope, runID)` 是 P9 扫描器可调用的接入点，返回表示调度已接纳，不表示租约已领取或恢复已完成。queued Run 可以首次 Execute；running/waiting Run 必须配置 `Options.Recover`，否则返回能力不支持，绝不重新 Execute。Recover 回调负责读取原分支检查点并恢复，Prepare 可预先加载检查点。P6/P9 已验证真实 SDK 检查点恢复、长任务等待聚合、原子交付和跨租户扫描循环。终态 Run 的任务由维护租约继续观察，迟到交付被丢弃，详见 [长任务与恢复](tasks.md)。
 
@@ -47,4 +47,4 @@ go build ./...
 覆盖：请求断开、输入不重复、完整消息持久化、异常终态、同键并发/不同输入冲突、作用域隔离、取消幂等与远端取消、迟到输出拒绝、服务关闭、queued 首次恢复/已开始运行的恢复回调、租期跨越、终止游标重连、回执重放、事务冲突不发布、跨客户端追赶和空闲跟随、慢消费者背压、回调失败、订阅取消、未来/过期游标及参数校验。
 
 
-P6 新增 app.NewOpenAIService 工厂，自动装配预算化准备、真实 ADK 和完成检查点恢复。最终消息、message.completed 事件与检查点同事务提交；恢复已提交输出不重复调用模型。新增集成测试使用真实 ADK、本地 OpenAI 协议服务与 MongoDB，真实外部模型验收仍待配置。详见 [ADK 接入说明](adk.md)。
+P6 新增 app.NewOpenAIService 工厂，自动装配上下文准备、真实 ADK 和完成检查点恢复。最终消息、message.completed 事件与检查点同事务提交；恢复已提交输出不重复调用模型。新增集成测试使用真实 ADK、本地 OpenAI 协议服务与 MongoDB，真实外部模型验收仍待配置。详见 [ADK 接入说明](adk.md)。

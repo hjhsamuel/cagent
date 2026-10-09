@@ -6,37 +6,50 @@ import (
 	"testing"
 )
 
-// 所有策略选项均经过环境加载；禁用、边界与安全错误不能依赖后续模型调用发现。
 func TestCompressionConfiguration(t *testing.T) {
-	v := requiredEnv()
-	v["CAGENT_CONTEXT_COMPRESSION_THRESHOLD_PERCENT"] = "65"
-	v["CAGENT_CONTEXT_KEEP_RECENT_ROUNDS"] = "3"
-	v["CAGENT_CONTEXT_SUMMARY_MODEL"] = "summary-model"
-	v["CAGENT_CONTEXT_SUMMARY_TOKEN_ENCODING"] = "cl100k_base"
-	v["CAGENT_CONTEXT_SUMMARY_WINDOW_TOKENS"] = "4000"
-	v["CAGENT_CONTEXT_SUMMARY_OUTPUT_TOKENS"] = "400"
-	c, e := load(v)
-	if e != nil || c.Context.CompressionThresholdPercent != 65 || c.Context.KeepRecentRounds != 3 || c.Context.SummaryModel != "" || c.Context.SummaryTokenEncoding != "" || c.Context.SummaryWindowTokens != 4000 || c.Context.SummaryOutputTokens != 400 {
-		t.Fatal(c.Context, e)
+	values := requiredEnv()
+	values["CAGENT_CONTEXT_COMPRESSION_ENABLED"] = "true"
+	values["CAGENT_CONTEXT_KEEP_RECENT_ROUNDS"] = "3"
+	values["CAGENT_CONTEXT_COMPRESSION_THRESHOLD_PERCENT"] = "75"
+	c, err := load(values)
+	if err != nil || !c.Context.CompressionEnabled || c.Context.KeepRecentRounds != 3 || c.Context.CompressionThresholdPercent != 75 {
+		t.Fatal(c.Context, err)
 	}
-	for _, tt := range []struct{ key, value, field string }{
-		{"COMPRESSION_THRESHOLD_PERCENT", "101", "compression_threshold_percent"},
-		{"COMPRESSION_THRESHOLD_PERCENT", "-1", "compression_threshold_percent"},
-		{"COMPRESSION_THRESHOLD_PERCENT", "", "compression_threshold_percent"},
+	for _, tc := range []struct{ key, value, field string }{
+		{"COMPRESSION_ENABLED", "invalid", "compression_enabled"},
+		{"COMPRESSION_ENABLED", "", "compression_enabled"},
 		{"KEEP_RECENT_ROUNDS", "0", "keep_recent_rounds"},
-		{"SUMMARY_WINDOW_TOKENS", "900", "summary_window_tokens"},
-		{"SUMMARY_OUTPUT_TOKENS", "0", "summary_window_tokens"},
+		{"KEEP_RECENT_ROUNDS", "-1", "keep_recent_rounds"},
+		{"COMPRESSION_THRESHOLD_PERCENT", "0", "compression_threshold_percent"},
+		{"COMPRESSION_THRESHOLD_PERCENT", "-1", "compression_threshold_percent"},
+		{"COMPRESSION_THRESHOLD_PERCENT", "101", "compression_threshold_percent"},
+		{"COMPRESSION_THRESHOLD_PERCENT", "invalid", "compression_threshold_percent"},
 	} {
-		old := v["CAGENT_CONTEXT_"+tt.key]
-		v["CAGENT_CONTEXT_"+tt.key] = tt.value
-		got, err := load(v)
-		assertInvalid(t, err, "context."+tt.field)
+		old := values["CAGENT_CONTEXT_"+tc.key]
+		values["CAGENT_CONTEXT_"+tc.key] = tc.value
+		got, err := load(values)
+		assertInvalid(t, err, "context."+tc.field)
 		if !reflect.DeepEqual(got, config.Config{}) {
 			t.Fatal("partial config")
 		}
-		v["CAGENT_CONTEXT_"+tt.key] = old
+		values["CAGENT_CONTEXT_"+tc.key] = old
 	}
-	if e := (config.Context{}).ValidateCompression(); e != nil {
-		t.Fatal("disabled rejected", e)
+	values["CAGENT_CONTEXT_COMPRESSION_ENABLED"] = "false"
+	values["CAGENT_CONTEXT_KEEP_RECENT_ROUNDS"] = "0"
+	values["CAGENT_CONTEXT_COMPRESSION_THRESHOLD_PERCENT"] = "0"
+	c, err = load(values)
+	if err != nil || c.Context.CompressionEnabled {
+		t.Fatal("disabled compression rejected", err)
+	}
+}
+
+func TestRemovedTokenSettingsAreIgnored(t *testing.T) {
+	values := requiredEnv()
+	for _, name := range []string{"WINDOW_TOKENS", "OUTPUT_TOKENS", "TOOL_TOKENS", "SAFETY_TOKENS", "SUMMARY_WINDOW_TOKENS", "SUMMARY_OUTPUT_TOKENS", "SUMMARY_TOKEN_ENCODING", "COMPRESSION_TRIGGER_TOKENS"} {
+		values["CAGENT_CONTEXT_"+name] = "invalid obsolete value"
+	}
+	got, err := load(values)
+	if err != nil || got.Context != config.Defaults().Context {
+		t.Fatal("obsolete budget settings were loaded", err)
 	}
 }

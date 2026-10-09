@@ -42,7 +42,7 @@ func (r *Database) SaveSnapshot(ctx context.Context, g store.WriteGuard, next do
 		if err = store.CheckVersion(sessionVersion, s.Version); err != nil {
 			return err
 		}
-		if next.Version != expected || next.ThroughSequence < 0 || next.ThroughSequence > sd.LastSequence || next.TokenEstimate < 0 {
+		if next.Version != expected || next.ThroughSequence < 0 || next.ThroughSequence > sd.LastSequence {
 			return invalid("snapshot")
 		}
 		f := scoped(s.Scope)

@@ -168,7 +168,7 @@ func (r *Runtime) tools(ctx context.Context, req agent.Request, state *toolRun) 
 }
 
 // toolEvent 持久化完整调用/结果对。任务句柄不生成最终工具结果；未完成调用留在历史。
-func toolEvent(ctx context.Context, emit agent.Emit, content *genai.Content, state *toolRun) (bool, error) {
+func toolEvent(ctx context.Context, emit agent.Emit, content *genai.Content, state *toolRun, promptTokens int32) (bool, error) {
 	var calls, results []domain.Part
 	for _, p := range content.Parts {
 		if p == nil {
@@ -201,7 +201,7 @@ func toolEvent(ctx context.Context, emit agent.Emit, content *genai.Content, sta
 		}
 	}
 	if len(calls) > 0 {
-		if e := emit(ctx, agent.Update{Kind: domain.EventToolStarted, Message: calls}); e != nil {
+		if e := emit(ctx, agent.Update{Kind: domain.EventToolStarted, Message: calls, PromptTokens: promptTokens}); e != nil {
 			return true, e
 		}
 	}

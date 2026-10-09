@@ -10,7 +10,6 @@ import (
 	"github.com/hjhsamuel/cagent/internal/agent"
 	"github.com/hjhsamuel/cagent/internal/apperrors"
 	"github.com/hjhsamuel/cagent/internal/config"
-	"github.com/hjhsamuel/cagent/internal/contextengine"
 	"github.com/hjhsamuel/cagent/internal/domain"
 	"github.com/hjhsamuel/cagent/internal/observability"
 	"github.com/hjhsamuel/cagent/internal/store"
@@ -19,8 +18,8 @@ import (
 )
 
 // Options 由启动装配提供，生命周期不继承任何 HTTP 请求。
-// Prepare 在租约保护下准备模型请求；P5 的 NewContextPreparer 提供预算化实现，
-// P6 装配时须注入匹配真实模型的计数器。为空仅保留 P4 原始历史替身路径。
+// Prepare 在租约保护下准备模型请求；NewContextPreparer 提供历史与工具关联校验，
+// 为空仅保留 P4 原始历史替身路径。
 // Recover 专门处理已经开始的运行，必须加载持久检查点，禁止静默重新 Execute。
 // StartRecovery 使用独立管理连接发现候选；服务内观察不构成工具执行队列。
 type Options struct {
@@ -481,7 +480,10 @@ func (a *Application) execute(parent context.Context, scope domain.Scope, id str
 				if role != domain.RoleAssistant && role != domain.RoleTool {
 					return invalid("update.message_role")
 				}
-				messages = []domain.Message{{Scope: scope, ID: newID(), SessionID: request.Run.SessionID, RunID: id, Role: role, Parts: update.Message}}
+				if update.PromptTokens < 0 || (role != domain.RoleAssistant && update.PromptTokens != 0) {
+					return invalid("update.prompt_tokens")
+				}
+				messages = []domain.Message{{Scope: scope, ID: newID(), SessionID: request.Run.SessionID, RunID: id, Role: role, Parts: update.Message, PromptTokens: update.PromptTokens}}
 			}
 			if update.Checkpoint != nil && update.Checkpoint.Caller != request.Caller && len(update.Tasks) == 0 {
 				return invalid("update.checkpoint.caller")
@@ -554,9 +556,6 @@ func (a *Application) execute(parent context.Context, scope domain.Scope, id str
 	}
 	if errors.Is(err, agent.ErrUncertain) {
 		terminal = []domain.Event{{Scope: scope, RunID: id, Kind: domain.EventRunFailed, Data: []byte(`{"reason":"execution_outcome_uncertain","retry_tool":false}`)}}
-	}
-	if errors.Is(err, contextengine.ErrBudgetExceeded) {
-		terminal = []domain.Event{{Scope: scope, RunID: id, Kind: domain.EventRunFailed, Data: []byte(`{"reason":"context_budget_exceeded","retry_tool":false}`)}}
 	}
 	if e := commit(status, terminal, nil, nil); e != nil {
 		return e

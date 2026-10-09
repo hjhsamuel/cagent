@@ -40,7 +40,7 @@ func (m *adminModels) Delete(_ context.Context, id string) error {
 	return m.catalog.DeleteModelConfiguration(id, func(*schema.Model, *schema.Model) error { return nil })
 }
 
-const modelBody = `{"model":"vendor-model","provider":"GLM","base_url":"https://example.invalid/v1","api_keys":[{"id":"key-1","value":"supplier-secret","weight":1}],"config":{"token_encoding":"o200k_base","max_tokens_field":"max_tokens","request_timeout":"2s","window_tokens":8192,"output_tokens":2048}}`
+const modelBody = `{"model":"vendor-model","provider":"GLM","base_url":"https://example.invalid/v1","api_keys":[{"id":"key-1","value":"supplier-secret","weight":1}],"config":{"window_tokens":32768,"request_timeout":"2s"}}`
 
 func TestModelManagementHTTP(t *testing.T) {
 	cfg := settings()
@@ -59,7 +59,7 @@ func TestModelManagementHTTP(t *testing.T) {
 		if w.Code != want {
 			t.Fatalf("%s %s: %d %s", method, path, w.Code, w.Body.String())
 		}
-		for _, secret := range []string{"supplier-secret", "ciphertext", "nonce"} {
+		for _, secret := range []string{"supplier-secret", "ciphertext", "nonce", "token_encoding", "max_tokens_field", "output_tokens"} {
 			if strings.Contains(w.Body.String(), secret) {
 				t.Fatal("secret exposed")
 			}
@@ -76,6 +76,9 @@ func TestModelManagementHTTP(t *testing.T) {
 	request("PUT", "/debug/models/model", strings.Replace(modelBody, `"value":"supplier-secret",`, "", 1), auth, 200)
 	for _, body := range []string{"", "{", modelBody + `{}`, strings.Replace(modelBody, `"model":`, `"unknown":1,"model":`, 1)} {
 		request("PUT", "/debug/models/model", body, auth, 400)
+	}
+	for _, removed := range []string{`"token_encoding":"o200k_base",`, `"max_tokens_field":"max_tokens",`, `"output_tokens":2048,`} {
+		request("PUT", "/debug/models/model", strings.Replace(modelBody, `"config":{`, `"config":{`+removed, 1), auth, 400)
 	}
 	models.fail = true
 	request("PUT", "/debug/models/model", modelBody, auth, 409)

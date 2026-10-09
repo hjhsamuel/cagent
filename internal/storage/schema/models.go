@@ -22,11 +22,9 @@ type EncryptedKey struct {
 }
 
 type ModelConfig struct {
-	TokenEncoding  string   `bson:"token_encoding" json:"token_encoding"`
-	MaxTokensField string   `bson:"max_tokens_field" json:"max_tokens_field"`
+	// WindowTokens 是供应商模型的上下文上限，仅用于自动摘要比例触发。
+	WindowTokens   int64    `bson:"window_tokens" json:"window_tokens"`
 	RequestTimeout string   `bson:"request_timeout" json:"request_timeout"`
-	WindowTokens   int      `bson:"window_tokens" json:"window_tokens"`
-	OutputTokens   int      `bson:"output_tokens" json:"output_tokens"`
 	Thinking       Thinking `bson:"thinking" json:"thinking"`
 }
 
