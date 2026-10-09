@@ -44,7 +44,7 @@ func (b *Database) AcquireLease(ctx context.Context, scope domain.Scope, runID, 
 		var run domain.Run
 		err := b.collection(RunCollection).FindOne(tx, key(scope, runID)).Decode(&doc)
 		if err == nil {
-			err = doc.decode(&run)
+			err = b.decode(tx, doc, &run)
 		}
 		if err != nil {
 			return err
@@ -63,6 +63,10 @@ func (b *Database) AcquireLease(ctx context.Context, scope domain.Scope, runID, 
 			err = conflict("lease")
 		}
 		result = leaseValue(d)
+		if err != nil {
+			return err
+		}
+		_, err = b.collection(RunCollection).UpdateOne(tx, key(scope, runID), bson.M{"$set": bson.M{"next_action_at": result.ExpiresAt}})
 		return err
 	})
 	if commitErr != nil {
@@ -99,6 +103,10 @@ func (b *Database) RenewLease(ctx context.Context, l store.Lease, duration time.
 			err = conflict("lease")
 		}
 		result = leaseValue(d)
+		if err != nil {
+			return err
+		}
+		_, err = b.collection(RunCollection).UpdateOne(tx, key(l.Scope, l.RunID), bson.M{"$set": bson.M{"next_action_at": result.ExpiresAt}})
 		return err
 	})
 	if commitErr != nil {
@@ -120,7 +128,8 @@ func (b *Database) ReleaseLease(ctx context.Context, l store.Lease) error {
 		if r.MatchedCount != 1 {
 			return conflict("lease")
 		}
-		return nil
+		_, err = b.collection(RunCollection).UpdateOne(tx, key(l.Scope, l.RunID), mongo.Pipeline{{{Key: "$set", Value: bson.M{"next_action_at": "$$NOW"}}}})
+		return err
 	})
 	return err
 }
@@ -137,7 +146,7 @@ func (b *Database) guard(ctx context.Context, g store.WriteGuard) (domain.Run, d
 	var run domain.Run
 	err := b.collection(RunCollection).FindOne(ctx, key(g.Lease.Scope, g.Lease.RunID)).Decode(&doc)
 	if err == nil {
-		err = doc.decode(&run)
+		err = b.decode(ctx, doc, &run)
 	}
 	if err != nil {
 		return run, doc, time.Time{}, err

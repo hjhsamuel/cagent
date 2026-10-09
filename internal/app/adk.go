@@ -28,6 +28,7 @@ func NewOpenAIService(parent context.Context, db *mongodb.Database, cfg config.C
 		lifecycle.Tasks = cfg.Tasks
 	}
 	lifecycle.Capacity = cfg.Capacity
+	lifecycle.Maintenance = cfg.Maintenance
 	gate := observability.NewGate(cfg.Capacity.Models, "model")
 	if cfg.Models != nil {
 		return newSessionModelService(parent, db, cfg, system, lifecycle, gate, tools...)
@@ -47,7 +48,7 @@ func NewADKService(parent context.Context, db *mongodb.Database, runtime *adk.Ru
 		return nil, invalid("adk.service")
 	}
 	// 禁用压缩仅停止生成新摘要；旧摘要可能没有完整用户要求，仍须保留用户原文。
-	opts.PreserveUsers = true
+	opts.PreserveUsers = !opts.ArchiveCompleted
 	var engine contextengine.Engine
 	var err error
 	if opts.Compression != nil {
@@ -93,6 +94,10 @@ func buildOpenAIRuntime(cfg config.Config, system []domain.Part, gate *observabi
 		return nil, ContextOptions{}, err
 	}
 	opts := ContextOptions{System: system, Budget: budget, PolicyVersion: cfg.Context.PolicyVersion}
+	opts.ArchiveCompleted = cfg.Context.ArchiveCompleted && cfg.Context.CompressionThresholdPercent > 0
+	if opts.ArchiveCompleted {
+		opts.PolicyVersion += "/archive-v1"
+	}
 	if cfg.Context.CompressionThresholdPercent > 0 {
 		summaryCfg := cfg.Agent
 		if cfg.SummaryAgent != nil {

@@ -19,7 +19,7 @@ func (b *Database) CancelTask(ctx context.Context, scope domain.Scope, id string
 		if e := b.collection(TaskCollection).FindOne(tx, key(scope, id)).Decode(&td); e != nil {
 			return e
 		}
-		if e := td.decode(&task); e != nil {
+		if e := b.decode(tx, td, &task); e != nil {
 			return e
 		}
 		now, e := b.now(tx)
@@ -39,7 +39,7 @@ func (b *Database) CancelTask(ctx context.Context, scope domain.Scope, id string
 		if e = b.collection(RunCollection).FindOne(tx, key(scope, task.Call.RunID)).Decode(&rd); e != nil {
 			return e
 		}
-		if e = rd.decode(&run); e != nil {
+		if e = b.decode(tx, rd, &run); e != nil {
 			return e
 		}
 		task.Version, e = increment(task.Version)
@@ -58,6 +58,7 @@ func (b *Database) CancelTask(ctx context.Context, scope domain.Scope, id string
 		if out.MatchedCount != 1 {
 			return conflict("task.version")
 		}
+		rd.NextActionAt = now
 		if e = b.saveRun(tx, &run, rd, rd, now); e != nil {
 			return e
 		}

@@ -22,7 +22,7 @@ func (r *Database) GetSession(ctx context.Context, s domain.Scope, id string) (d
 	var v domain.Session
 	err := r.collection(SessionCollection).FindOne(ctx, key(s, id)).Decode(&vDoc)
 	if err == nil {
-		err = vDoc.decode(&v)
+		err = r.decode(ctx, vDoc, &v)
 	}
 	return v, safeError(err)
 }
@@ -38,7 +38,7 @@ func (r *Database) GetRun(ctx context.Context, s domain.Scope, id string) (domai
 	var v domain.Run
 	err := r.collection(RunCollection).FindOne(ctx, key(s, id)).Decode(&vDoc)
 	if err == nil {
-		err = vDoc.decode(&v)
+		err = r.decode(ctx, vDoc, &v)
 	}
 	return v, safeError(err)
 }
@@ -54,7 +54,7 @@ func (r *Database) GetTask(ctx context.Context, s domain.Scope, id string) (doma
 	var v domain.Task
 	err := r.collection(TaskCollection).FindOne(ctx, key(s, id)).Decode(&vDoc)
 	if err == nil {
-		err = vDoc.decode(&v)
+		err = r.decode(ctx, vDoc, &v)
 	}
 	return v, safeError(err)
 }
@@ -70,7 +70,7 @@ func (r *Database) GetTaskDelivery(ctx context.Context, s domain.Scope, id strin
 	var v domain.TaskDelivery
 	err := r.collection(TaskDeliveryCollection).FindOne(ctx, key(s, id)).Decode(&vDoc)
 	if err == nil {
-		err = vDoc.decode(&v)
+		err = r.decode(ctx, vDoc, &v)
 	}
 	return v, safeError(err)
 }
@@ -92,7 +92,7 @@ func (r *Database) GetCheckpoint(ctx context.Context, s domain.Scope, runID, inv
 	var v domain.Checkpoint
 	err := r.collection(CheckpointCollection).FindOne(ctx, f).Decode(&vDoc)
 	if err == nil {
-		err = vDoc.decode(&v)
+		err = r.decode(ctx, vDoc, &v)
 	}
 	return v, safeError(err)
 }
@@ -114,7 +114,7 @@ func (r *Database) FindRunByKey(ctx context.Context, s domain.Scope, sessionID, 
 	var v domain.Run
 	err := r.collection(RunCollection).FindOne(ctx, f).Decode(&vDoc)
 	if err == nil {
-		err = vDoc.decode(&v)
+		err = r.decode(ctx, vDoc, &v)
 	}
 	return v, safeError(err)
 }
@@ -164,7 +164,7 @@ func (r *Database) ListMessages(ctx context.Context, s domain.Scope, id string, 
 		var storedSession domain.Session
 		err := r.collection(SessionCollection).FindOne(tx, key(s, id)).Decode(&session)
 		if err == nil {
-			err = session.decode(&storedSession)
+			err = r.decode(tx, session, &storedSession)
 		}
 		if err != nil {
 			return err
@@ -190,7 +190,7 @@ func (r *Database) ListMessages(ctx context.Context, s domain.Scope, id string, 
 		}
 		for _, d := range docs {
 			var v domain.Message
-			err := d.decode(&v)
+			err := r.decode(tx, d, &v)
 			if err != nil {
 				return err
 			}
@@ -223,7 +223,7 @@ func (r *Database) ListEvents(ctx context.Context, s domain.Scope, id string, p 
 		var storedRun domain.Run
 		err := r.collection(RunCollection).FindOne(tx, key(s, id)).Decode(&run)
 		if err == nil {
-			err = run.decode(&storedRun)
+			err = r.decode(tx, run, &storedRun)
 		}
 		if err != nil {
 			return err
@@ -252,7 +252,7 @@ func (r *Database) ListEvents(ctx context.Context, s domain.Scope, id string, p 
 		}
 		for _, d := range docs {
 			var v domain.Event
-			err := d.decode(&v)
+			err := r.decode(tx, d, &v)
 			if err != nil {
 				return err
 			}
@@ -285,7 +285,7 @@ func (r *Database) ListUnsettledTasks(ctx context.Context, s domain.Scope, id st
 		var storedRun domain.Run
 		err := r.collection(RunCollection).FindOne(tx, key(s, id)).Decode(&value1629Doc)
 		if err == nil {
-			err = value1629Doc.decode(&storedRun)
+			err = r.decode(tx, value1629Doc, &storedRun)
 		}
 		if err != nil {
 			return err
@@ -309,7 +309,7 @@ func (r *Database) ListUnsettledTasks(ctx context.Context, s domain.Scope, id st
 		}
 		for _, d := range docs {
 			var t domain.Task
-			err := d.decode(&t)
+			err := r.decode(tx, d, &t)
 			if err != nil {
 				return err
 			}
@@ -318,7 +318,7 @@ func (r *Database) ListUnsettledTasks(ctx context.Context, s domain.Scope, id st
 				var delivery domain.TaskDelivery
 				err := r.collection(TaskDeliveryCollection).FindOne(tx, key(s, t.ID)).Decode(&deliveryDoc)
 				if err == nil {
-					err = deliveryDoc.decode(&delivery)
+					err = r.decode(tx, deliveryDoc, &delivery)
 				}
 				if err != nil {
 					if errors.Is(err, mongo.ErrNoDocuments) {
@@ -365,6 +365,6 @@ func (r *Database) LatestSnapshot(ctx context.Context, s domain.Scope, id string
 		return domain.ContextSnapshot{}, safeError(mongo.ErrNoDocuments)
 	}
 	var v domain.ContextSnapshot
-	err = docs[0].decode(&v)
+	err = r.decode(ctx, docs[0], &v)
 	return v, safeError(err)
 }

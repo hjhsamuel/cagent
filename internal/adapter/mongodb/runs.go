@@ -40,7 +40,7 @@ func (b *Database) ReplayRun(ctx context.Context, scope domain.Scope, sessionID,
 		return domain.Run{}, err
 	}
 	var run domain.Run
-	err := d.decode(&run)
+	err := b.decode(ctx, d, &run)
 	return run, safeError(err)
 }
 
@@ -63,7 +63,7 @@ func (b *Database) StartRun(ctx context.Context, req store.StartRunRequest) (sto
 			var storedRun domain.Run
 			err := b.collection(RunCollection).FindOne(tx, f).Decode(&d)
 			if err == nil {
-				err = d.decode(&storedRun)
+				err = b.decode(tx, d, &storedRun)
 			}
 			if err == nil {
 				var saved [32]byte
@@ -90,7 +90,7 @@ func (b *Database) StartRun(ctx context.Context, req store.StartRunRequest) (sto
 		var s domain.Session
 		err := b.collection(SessionCollection).FindOne(tx, key(req.Run.Scope, req.Run.SessionID)).Decode(&old)
 		if err == nil {
-			err = old.decode(&s)
+			err = b.decode(tx, old, &s)
 		}
 		if err != nil {
 			return err
@@ -139,6 +139,8 @@ func (b *Database) StartRun(ctx context.Context, req store.StartRunRequest) (sto
 		if err != nil {
 			return err
 		}
+		d.Recovery = true
+		d.NextActionAt = now
 		d.SessionID = run.SessionID
 		d.Status = string(run.Status)
 		d.IdempotencyKey = run.IdempotencyKey
@@ -285,7 +287,7 @@ func (b *Database) CancelRun(ctx context.Context, req store.CancelRunRequest) (s
 		var run domain.Run
 		err := b.collection(RunCollection).FindOne(tx, key(req.Scope, req.RunID)).Decode(&old)
 		if err == nil {
-			err = old.decode(&run)
+			err = b.decode(tx, old, &run)
 		}
 		if err != nil {
 			return err
@@ -295,7 +297,7 @@ func (b *Database) CancelRun(ctx context.Context, req store.CancelRunRequest) (s
 		var s domain.Session
 		err = b.collection(SessionCollection).FindOne(tx, key(run.Scope, run.SessionID)).Decode(&sDoc)
 		if err == nil {
-			err = sDoc.decode(&s)
+			err = b.decode(tx, sDoc, &s)
 		}
 		if err != nil {
 			return err

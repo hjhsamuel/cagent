@@ -20,18 +20,24 @@ type resultView struct {
 	Error  string     `json:"error,omitempty"`
 }
 type taskView struct {
-	ID                 string            `json:"id"`
-	RunID              string            `json:"run_id"`
-	ToolCallID         string            `json:"tool_call_id"`
-	AgentID            string            `json:"agent_id"`
-	InvocationID       string            `json:"invocation_id"`
-	ParentInvocationID string            `json:"parent_invocation_id,omitempty"`
-	Status             domain.TaskStatus `json:"status"`
-	Progress           []partView        `json:"progress"`
-	Result             *resultView       `json:"result,omitempty"`
-	CancelRequestedAt  *time.Time        `json:"cancel_requested_at,omitempty"`
-	ObservationError   string            `json:"observation_error,omitempty"`
-	AppliedAt          *time.Time        `json:"applied_at,omitempty"`
+	ID                 string                 `json:"id"`
+	RunID              string                 `json:"run_id"`
+	ToolCallID         string                 `json:"tool_call_id"`
+	AgentID            string                 `json:"agent_id"`
+	InvocationID       string                 `json:"invocation_id"`
+	ParentInvocationID string                 `json:"parent_invocation_id,omitempty"`
+	Status             domain.TaskStatus      `json:"status"`
+	Progress           []partView             `json:"progress"`
+	Result             *resultView            `json:"result,omitempty"`
+	CancelRequestedAt  *time.Time             `json:"cancel_requested_at,omitempty"`
+	ObservationError   string                 `json:"observation_error,omitempty"`
+	AppliedAt          *time.Time             `json:"applied_at,omitempty"`
+	Maintenance        domain.TaskMaintenance `json:"maintenance"`
+	MaintenanceReason  string                 `json:"maintenance_reason,omitempty"`
+	LastContactAt      time.Time              `json:"last_contact_at,omitempty"`
+	NextObservationAt  time.Time              `json:"next_observation_at,omitempty"`
+	CancelAttempts     int                    `json:"cancel_attempts"`
+	CancelError        string                 `json:"cancel_error,omitempty"`
 }
 
 func partsDTO(parts []domain.Part) []partView {
@@ -43,6 +49,15 @@ func partsDTO(parts []domain.Part) []partView {
 }
 func taskDTO(t domain.Task) taskView {
 	out := taskView{ID: t.ID, RunID: t.Call.RunID, ToolCallID: t.Call.ID, AgentID: t.Call.Caller.AgentID, InvocationID: t.Call.Caller.InvocationID, ParentInvocationID: t.Call.Caller.ParentInvocationID, Status: t.Status, Progress: partsDTO(t.Progress), CancelRequestedAt: t.CancelRequestedAt, ObservationError: t.ObservationError, AppliedAt: t.AppliedAt}
+	out.Maintenance = t.Maintenance
+	if out.Maintenance == "" {
+		out.Maintenance = domain.MaintenanceActive
+	}
+	out.MaintenanceReason = t.MaintenanceReason
+	out.LastContactAt = t.LastContactAt
+	out.NextObservationAt = t.NextObservationAt
+	out.CancelAttempts = t.CancelAttempts
+	out.CancelError = t.CancelError
 	if t.Result != nil {
 		out.Result = &resultView{CallID: t.Result.CallID, Parts: partsDTO(t.Result.Parts), Error: t.Result.Error}
 	}

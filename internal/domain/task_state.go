@@ -23,6 +23,7 @@ func (t *Task) RequestCancel(at time.Time) (bool, error) {
 		return false, err
 	}
 	t.CancelRequestedAt = &at
+	t.NextObservationAt = at
 	t.UpdatedAt = at
 	return true, nil
 }

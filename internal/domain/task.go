@@ -79,6 +79,16 @@ type Task struct {
 	Progress       []Part
 	ProviderCursor string
 	Version        int64
+	// Local maintenance does not change the provider Status or erase its handle.
+	Maintenance          TaskMaintenance
+	MaintenanceReason    string
+	LastContactAt        time.Time
+	NextObservationAt    time.Time
+	ConsecutiveErrors    int
+	InteractionSince     time.Time
+	MaintenanceResumedAt time.Time
+	CancelAttempts       int
+	CancelError          string
 	// CancelRequestedAt 只记录首次取消意图，不代表提供方接受或完成取消。
 	CancelRequestedAt *time.Time
 	// LastObservedAt 是最近一次有变化（含首次或错误恢复）的成功观察时间，
@@ -92,6 +102,14 @@ type Task struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
+
+type TaskMaintenance string
+
+const (
+	MaintenanceActive      TaskMaintenance = "active"
+	MaintenanceQuarantined TaskMaintenance = "quarantined"
+	MaintenanceSettled     TaskMaintenance = "settled"
+)
 
 // TaskUpdate 是适配器已协调顺序的完整提供方观察快照，不是重新执行工具的请求。
 // Status 必须是已知标准化状态；未知状态的原始诊断由适配层保留并重新查询。

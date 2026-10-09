@@ -106,6 +106,9 @@ func (r *Runtime) run(ctx context.Context, req agent.Request, emit agent.Emit) e
 			return err
 		}
 		saved = &v
+		if failure := checkpointFailure(v.Failure); failure != nil {
+			return failure
+		}
 		if len(req.Checkpoint.PendingCallIDs) > 0 {
 			return agent.ErrWaiting
 		}
@@ -285,7 +288,7 @@ func (r *Runtime) run(ctx context.Context, req agent.Request, emit agent.Emit) e
 		if err != nil {
 			return safeError(err)
 		}
-		if err = json.Unmarshal(data, &final); err != nil {
+		if err = decodeJSON(data, &final); err != nil {
 			return safeError(err)
 		}
 	}
@@ -301,7 +304,14 @@ func (r *Runtime) run(ctx context.Context, req agent.Request, emit agent.Emit) e
 		if e != nil {
 			return e
 		}
-		data, e := json.Marshal(pendingCheckpoint{Contents: mapped.Contents, ModelCalls: calls, Model: r.model.Name(), Messages: req.Messages, Scope: req.Run.Scope, RunID: req.Run.ID, Caller: req.Caller, SDK: snap, Tools: state.pending})
+		failure := ""
+		if state.failure != nil {
+			failure = "tool_execution_failed"
+			if errors.Is(state.failure, agent.ErrUncertain) {
+				failure = "execution_outcome_uncertain"
+			}
+		}
+		data, e := json.Marshal(pendingCheckpoint{Contents: mapped.Contents, ModelCalls: calls, Model: r.model.Name(), Messages: req.Messages, Scope: req.Run.Scope, RunID: req.Run.ID, Caller: req.Caller, SDK: snap, Tools: state.pending, Failure: failure})
 		if e != nil {
 			return safeError(e)
 		}
@@ -324,6 +334,10 @@ func (r *Runtime) run(ctx context.Context, req agent.Request, emit agent.Emit) e
 			if e = emit(ctx, agent.Update{Kind: domain.EventToolWaiting, Checkpoint: cp, Tasks: tasks}); e != nil {
 				return e
 			}
+		}
+		// Handoff must finish before returning a failure: other calls already started.
+		if state.failure != nil {
+			return state.failure
 		}
 		return agent.ErrWaiting
 	}

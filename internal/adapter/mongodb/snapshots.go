@@ -28,7 +28,7 @@ func (r *Database) SaveSnapshot(ctx context.Context, g store.WriteGuard, next do
 		var s domain.Session
 		err = r.collection(SessionCollection).FindOne(tx, key(run.Scope, run.SessionID)).Decode(&sd)
 		if err == nil {
-			err = sd.decode(&s)
+			err = r.decode(tx, sd, &s)
 		}
 		if err != nil {
 			return err
@@ -58,7 +58,7 @@ func (r *Database) SaveSnapshot(ctx context.Context, g store.WriteGuard, next do
 		}
 		current := domain.ContextSnapshot{}
 		if len(docs) > 0 {
-			err = docs[0].decode(&current)
+			err = r.decode(tx, docs[0], &current)
 			if err != nil {
 				return err
 			}

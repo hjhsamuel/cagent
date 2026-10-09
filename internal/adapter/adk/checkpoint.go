@@ -33,7 +33,7 @@ func snapshotSDK(s session.Session) (sdkSnapshot, error) {
 		return sdkSnapshot{}, safeError(e)
 	}
 	var copy sdkSnapshot
-	e = json.Unmarshal(data, &copy)
+	e = decodeJSON(data, &copy)
 	return copy, safeError(e)
 }
 func restoreSDK(ctx context.Context, snap sdkSnapshot, app, user, id string) (session.Service, session.Session, error) {
@@ -82,7 +82,7 @@ func (r *Runtime) Recover(ctx context.Context, req agent.Request, emit agent.Emi
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if req.Checkpoint != nil && req.Checkpoint.Format == PendingCheckpointFormat {
+	if req.Checkpoint != nil && IsPendingCheckpoint(*req.Checkpoint) {
 		return r.run(ctx, req, emit)
 	}
 	cp := req.Checkpoint
@@ -99,7 +99,7 @@ func (r *Runtime) Recover(ctx context.Context, req agent.Request, emit agent.Emi
 		return invalid("checkpoint.identity")
 	}
 	var saved completedCheckpoint
-	if e := json.Unmarshal(cp.Data, &saved); e != nil {
+	if e := decodeJSON(cp.Data, &saved); e != nil {
 		return invalid("checkpoint.data")
 	}
 	if saved.Model != r.model.Name() || saved.Scope != req.Run.Scope || saved.RunID != req.Run.ID || saved.Caller != req.Caller {

@@ -21,7 +21,6 @@ type EventStream interface {
 // 停止后续读取，其他订阅和写入不受影响。单条大小限制由传输/运行适配层负责。
 type DurableEvents struct {
 	db       *mongodb.Database
-	interval time.Duration
 	pageSize int
 }
 
@@ -32,7 +31,8 @@ func (e *DurableEvents) CheckCursor(ctx context.Context, scope domain.Scope, run
 	return err
 }
 
-// NewEventStream 使用有界轮询；部署只需 P3 要求的事务副本集或 mongos。
+// NewEventStream uses shared notifications. interval is retained for caller
+// compatibility and validation; the shared metadata fallback runs every 3 seconds.
 func NewEventStream(db *mongodb.Database, interval time.Duration, pageSize int) (*DurableEvents, error) {
 	if db == nil || interval <= 0 {
 		return nil, invalid("events.options")
@@ -40,12 +40,16 @@ func NewEventStream(db *mongodb.Database, interval time.Duration, pageSize int) 
 	if err := (store.SequencePage{Limit: pageSize}).Validate(); err != nil {
 		return nil, err
 	}
-	return &DurableEvents{db: db, interval: interval, pageSize: pageSize}, nil
+	return &DurableEvents{db: db, pageSize: pageSize}, nil
 }
 
 // Publish 成功后事件才可见；失败返回空结果。结果未知时必须使用原操作 ID/内容重试。
 func (e *DurableEvents) Publish(ctx context.Context, req store.CommitRunRequest) (store.CommitResult, error) {
-	return e.db.CommitRun(ctx, req)
+	result, err := e.db.CommitRun(ctx, req)
+	if err == nil {
+		e.db.NotifyRunEvents(result.Run.Scope, result.Run.ID)
+	}
+	return result, err
 }
 
 // Follow 的水位和终态来自同一快照，避免终态检查竞态；已消费终止事件也正常返回。
@@ -55,7 +59,13 @@ func (e *DurableEvents) Follow(ctx context.Context, scope domain.Scope, runID st
 	if consume == nil {
 		return invalid("events.callback")
 	}
+	subscription, err := e.db.SubscribeRunEvents(scope, runID)
+	if err != nil {
+		return err
+	}
+	defer subscription.Close()
 	for {
+		wake := subscription.Channel()
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -78,12 +88,10 @@ func (e *DurableEvents) Follow(ctx context.Context, scope domain.Scope, runID st
 		if page.HasMore {
 			continue
 		}
-		timer := time.NewTimer(e.interval)
 		select {
 		case <-ctx.Done():
-			timer.Stop()
 			return ctx.Err()
-		case <-timer.C:
+		case <-wake:
 		}
 	}
 }

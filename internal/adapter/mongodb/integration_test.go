@@ -473,14 +473,19 @@ func TestMongoSnapshotsAndRecoveryScan(t *testing.T) {
 	}
 	_, err = admin.Scan(ctx, &store.RecoveryPosition{RunID: "run"}, 1)
 	wantKind(t, err, apperrors.ErrInvalidArgument)
-	// 新候选出现在游标之前，下一轮从头扫描能够发现。
+	// Due time precedes identity in the indexed cursor. A fresh scan still finds
+	// candidates created with an earlier identity after the preceding page.
 	earlier := domain.Scope{TenantID: "a-tenant", UserID: "user"}
 	newSession(t, db, earlier, "session")
 	_, err = db.StartRun(ctx, startRequest(earlier, "session", "run", "", 1))
 	check(t, err)
-	p, err = admin.Scan(ctx, nil, 1)
+	p, err = admin.Scan(ctx, nil, 10)
 	check(t, err)
-	if p.Items[0].Scope != earlier {
+	found := false
+	for _, candidate := range p.Items {
+		found = found || candidate.Scope == earlier
+	}
+	if !found {
 		t.Fatal("rescan missed earlier candidate")
 	}
 }

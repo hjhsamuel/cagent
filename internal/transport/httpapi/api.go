@@ -249,6 +249,20 @@ func NewWithModelManagement(service app.Service, events Events, cfg config.HTTP,
 		}
 		c.Status(202)
 	})
+	api.POST("/tasks/:taskID/resume-observation", func(c *gin.Context) {
+		maintenance, ok := service.(interface {
+			ResumeTaskMaintenance(context.Context, domain.Scope, string) error
+		})
+		if !ok {
+			respondError(c, apperrors.ErrUnsupported)
+			return
+		}
+		if err := maintenance.ResumeTaskMaintenance(c.Request.Context(), scopeOf(c), c.Param("taskID")); err != nil {
+			respondError(c, err)
+			return
+		}
+		c.Status(202)
+	})
 	if len(taskInputs) > 1 {
 		return nil, apperrors.ErrInvalidArgument
 	}

@@ -30,6 +30,18 @@ func (a *Application) CancelTask(ctx context.Context, scope domain.Scope, id str
 	a.schedule(scope, task.Call.RunID)
 	return nil
 }
+func (a *Application) ResumeTaskMaintenance(ctx context.Context, scope domain.Scope, id string) error {
+	task, err := a.db.ResumeTaskMaintenance(ctx, scope, id)
+	if err != nil {
+		return err
+	}
+	a.schedule(scope, task.Call.RunID)
+	return nil
+}
+func (a *Application) maintenancePolicy() store.TaskMaintenancePolicy {
+	m := a.opts.Maintenance
+	return store.TaskMaintenancePolicy{Poll: a.opts.Tasks.PollInterval, Backoff: a.opts.Tasks.ReconnectBackoff, MaxBackoff: m.MaxBackoff, CancelGrace: m.CancelGrace, DetachedGrace: m.DetachedGrace, OutageGrace: m.OutageGrace, InteractionGrace: m.InteractionGrace}
+}
 
 func waitTask(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(d)
@@ -46,9 +58,6 @@ func waitTask(ctx context.Context, d time.Duration) error {
 // 网络观察在锁外进行，写入/续租串行；租约失效立即取消所有本次观察。
 // 每页最多 32 个任务、最多 8 个并发观察，慢提供方不会阻止其他任务获得观察机会。
 func (a *Application) maintainTasks(parent context.Context, scope domain.Scope, id string) (bool, error) {
-	if a.opts.Registry == nil {
-		return false, nil
-	}
 	run, e := a.db.GetRun(parent, scope, id)
 	if e != nil {
 		return false, e
@@ -56,6 +65,11 @@ func (a *Application) maintainTasks(parent context.Context, scope domain.Scope, 
 	if run.Status == domain.RunQueued {
 		return false, nil
 	}
+	release, err := a.maintenance.Try(parent)
+	if err != nil {
+		return false, err
+	}
+	defer release()
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	lease, e := a.db.AcquireLease(ctx, scope, id, a.owner, a.opts.LeaseDuration)
@@ -138,6 +152,17 @@ func (a *Application) maintainTasks(parent context.Context, scope domain.Scope, 
 		}
 	}
 	var after string
+	// Repair all handles first, then finalize a durable execution failure before
+	// observing dependencies. Terminal runs continue maintenance without generation.
+	if !run.Status.IsTerminal() {
+		if runtime, ok := a.runtime.(interface{ CheckpointFailure(domain.Checkpoint) error }); ok {
+			for _, cp := range checkpoints {
+				if runtime.CheckpointFailure(cp) != nil {
+					return false, nil
+				}
+			}
+		}
+	}
 	for {
 		page, err := a.db.ListUnsettledTasks(ctx, scope, id, store.KeyPage{After: after, Limit: 32})
 		if err != nil {
@@ -147,6 +172,7 @@ func (a *Application) maintainTasks(parent context.Context, scope domain.Scope, 
 			task   domain.Task
 			update domain.TaskUpdate
 			err    error
+			cancel cancellationObservation
 		}
 		results := make(chan observation, len(page.Items))
 		slots := make(chan struct{}, 8)
@@ -172,7 +198,29 @@ func (a *Application) maintainTasks(parent context.Context, scope domain.Scope, 
 					return false, err
 				}
 			}
+			if a.maintenancePolicy().Reason(task, run, time.Now()) != "" {
+				mu.Lock()
+				g, err := guard()
+				if err == nil {
+					var out store.TaskCommitResult
+					out, err = a.db.RecordTaskMaintenance(ctx, g, task.ID, task.Version, a.maintenancePolicy(), false, false, false, "")
+					task = out.Task
+				}
+				mu.Unlock()
+				if err != nil {
+					cancel()
+					observers.Wait()
+					return false, err
+				}
+				if task.Maintenance == domain.MaintenanceQuarantined {
+					continue
+				}
+			}
+			if task.NextObservationAt.After(time.Now()) {
+				continue
+			}
 			observers.Add(1)
+			deadline := a.maintenancePolicy().Deadline(task, run)
 			go func(task domain.Task) {
 				defer observers.Done()
 				select {
@@ -182,8 +230,15 @@ func (a *Application) maintainTasks(parent context.Context, scope domain.Scope, 
 					return
 				}
 				defer func() { <-slots }()
-				update, err := a.observeTask(ctx, task)
-				results <- observation{task: task, update: update, err: err}
+				observationCtx := ctx
+				if !deadline.IsZero() {
+					var stop context.CancelFunc
+					observationCtx, stop = context.WithDeadline(ctx, deadline)
+					defer stop()
+				}
+				var cancellation cancellationObservation
+				update, err := a.observeTaskState(observationCtx, task, &cancellation)
+				results <- observation{task: task, update: update, err: err, cancel: cancellation}
 			}(task)
 		}
 		go func() { observers.Wait(); close(results) }()
@@ -213,6 +268,16 @@ func (a *Application) maintainTasks(parent context.Context, scope domain.Scope, 
 					task = out.Task
 					g.RunVersion = out.RunVersion
 					run.Version = out.RunVersion
+					out, err = a.db.RecordTaskMaintenance(ctx, g, task.ID, task.Version, a.maintenancePolicy(), true, observed.err == nil, observed.cancel.Attempted, observed.cancel.Error)
+					if err != nil {
+						return err
+					}
+					task = out.Task
+					g.RunVersion = out.RunVersion
+					run.Version = out.RunVersion
+				}
+				if task.Maintenance == domain.MaintenanceQuarantined {
+					return nil
 				}
 				if !task.Status.IsTerminal() {
 					return nil
@@ -307,7 +372,15 @@ func taskEvents(run domain.Run, t domain.Task, kind domain.EventKind) []domain.E
 
 // observeTask 优先订阅；不支持或断流时完整查询，避免把网络故障映射成 failed。
 // 每次只取一个通知，再由适配器完整快照协调顺序；游标从持久 Task 恢复。
-func (a *Application) observeTask(ctx context.Context, t domain.Task) (result domain.TaskUpdate, resultErr error) {
+type cancellationObservation struct {
+	Attempted bool
+	Error     string
+}
+
+func (a *Application) observeTask(ctx context.Context, t domain.Task) (domain.TaskUpdate, error) {
+	return a.observeTaskState(ctx, t, nil)
+}
+func (a *Application) observeTaskState(ctx context.Context, t domain.Task, cancellation *cancellationObservation) (result domain.TaskUpdate, resultErr error) {
 	ctx, finish := observability.Default.Start(ctx, "observation")
 	defer func() { finish(resultErr) }()
 	// 观察容量跨 Run 共享，过载只中断本地观察，绝不改变远端任务终态。
@@ -316,13 +389,24 @@ func (a *Application) observeTask(ctx context.Context, t domain.Task) (result do
 		return domain.TaskUpdate{}, err
 	}
 	defer release()
+	if a.opts.Registry == nil {
+		return domain.TaskUpdate{}, apperrors.ErrUnsupported
+	}
 	client, e := a.opts.Registry.ResolveTask(ctx, t.Scope, t.Handle)
 	if e != nil {
 		return domain.TaskUpdate{}, e
 	}
 	if t.CancelRequestedAt != nil {
 		c, stop := context.WithTimeout(ctx, a.opts.Tasks.ObservationTimeout)
-		_ = client.Cancel(c, t.Call, t.Handle)
+		cancelErr := client.Cancel(c, t.Call, t.Handle)
+		if cancellation != nil {
+			cancellation.Attempted = true
+			if errors.Is(cancelErr, apperrors.ErrUnsupported) {
+				cancellation.Error = "unsupported"
+			} else if cancelErr != nil {
+				cancellation.Error = "interrupted"
+			}
+		}
 		stop()
 	}
 	c, stop := context.WithTimeout(ctx, a.opts.Tasks.ObservationTimeout)

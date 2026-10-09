@@ -16,4 +16,5 @@ const (
 	MutationReceiptCollection = schema.MutationReceiptCollection
 	LeaseCollection           = schema.LeaseCollection
 	ClockCollection           = schema.ClockCollection
+	PayloadCollection         = schema.PayloadCollection
 )

@@ -21,7 +21,8 @@ type ContextOptions struct {
 	PolicyVersion string
 	// PreserveUsers 保护旧摘要覆盖范围中的用户原文；生产 ADK 装配始终开启，
 	// 即使临时禁用新摘要生成，也不能因沿用旧快照而丢失用户要求。
-	PreserveUsers bool
+	PreserveUsers    bool
+	ArchiveCompleted bool
 	// Compression 为 nil 时保持只读的 P5 准备行为。摘要候选由应用租约持有者保存。
 	Compression *contextengine.CompressionPolicy
 	Summarizer  contextengine.Summarizer
@@ -47,12 +48,29 @@ func NewContextPreparer(db *mongodb.Database, engine contextengine.Engine, opts 
 		if err != nil {
 			return agent.Request{}, err
 		}
-		in := contextengine.Input{Session: session, RunID: run.ID, Budget: opts.Budget, PolicyVersion: opts.PolicyVersion, PreserveUsers: opts.PreserveUsers}
+		in := contextengine.Input{Session: session, RunID: run.ID, Budget: opts.Budget, PolicyVersion: opts.PolicyVersion, PreserveUsers: opts.PreserveUsers, ArchiveCompleted: opts.ArchiveCompleted}
 		if system != nil {
 			in.System = []domain.Message{{Scope: run.Scope, ID: "configured-system", SessionID: run.SessionID, Role: domain.RoleSystem, Parts: copyParts(system)}}
 		}
 		var after int64
-		for {
+		snapshot, snapshotErr := db.LatestSnapshot(ctx, run.Scope, run.SessionID)
+		if snapshotErr == nil {
+			in.Snapshot = &snapshot
+		} else if !errors.Is(snapshotErr, apperrors.ErrNotFound) {
+			return agent.Request{}, snapshotErr
+		}
+		if snapshotErr == nil && snapshot.PolicyVersion != opts.PolicyVersion && opts.Compression == nil {
+			in.Snapshot = nil
+		}
+		incremental := snapshotErr == nil && snapshot.PolicyVersion == opts.PolicyVersion && snapshot.ValidatedThrough == snapshot.ThroughSequence && snapshot.ThroughSequence > 0 && (!opts.ArchiveCompleted || snapshot.Archived)
+		if incremental {
+			in.History, in.HistoryThrough, err = db.ContextWindow(ctx, snapshot, session.Version, opts.ArchiveCompleted)
+			if err != nil {
+				return agent.Request{}, err
+			}
+			in.VerifiedPrefix = snapshot.ThroughSequence
+		}
+		for !incremental {
 			page, err := db.ListMessages(ctx, run.Scope, run.SessionID, store.SequencePage{After: after, Limit: 128})
 			if err != nil {
 				return agent.Request{}, err
@@ -63,10 +81,26 @@ func NewContextPreparer(db *mongodb.Database, engine contextengine.Engine, opts 
 			}
 			after = page.NextAfter
 		}
-		snapshot, err := db.LatestSnapshot(ctx, run.Scope, run.SessionID)
-		if err == nil {
-			in.Snapshot = &snapshot
-		} else if !errors.Is(err, apperrors.ErrNotFound) {
+		ids := make(map[string]bool)
+		for _, message := range in.History {
+			if message.RunID == run.ID {
+				continue
+			}
+			if opts.ArchiveCompleted {
+				ids[message.RunID] = true
+			}
+			for _, part := range message.Parts {
+				if part.Kind == domain.PartToolCall {
+					ids[message.RunID] = true
+				}
+			}
+		}
+		var runIDs []string
+		for id := range ids {
+			runIDs = append(runIDs, id)
+		}
+		in.RunStates, err = db.SessionRunStates(ctx, run.Scope, run.SessionID, runIDs)
+		if err != nil {
 			return agent.Request{}, err
 		}
 		prepared, err := engine.Prepare(ctx, in)

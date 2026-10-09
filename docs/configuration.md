@@ -93,13 +93,14 @@ P5 已通过 contextengine.Budget 消费四个 Token 预算字段；PolicyVersio
 
 沿用 `CAGENT_CONTEXT_POLICY_VERSION`（默认 v1）标记生成策略，修改摘要模型、提示词、保留规则时应提升版本。版本变化从原始历史重建，不继续使用不兼容旧摘要。摘要模型和 key 独立随机选择，从所选 MongoDB 文档加载 Provider、地址、加权密钥池、超时和输出限额字段。模型文档覆盖摘要编码和窗口；输出预算受文档上限约束。摘要模型实际窗口及编码必须由部署者确认，默认预算不代表任意模型的能力。
 
-每次准备至多一次摘要生成，摘要输入也必须先通过预算；失败只回退到预算合格的原输入，否则明确报错。完整语义与快照并发控制见 [上下文压缩](context.md)。完整环境键清单以 .env.example 为准。
+摘要输入必须先通过预算；兼容快照使用增量摘要，预算拒绝时允许有界分段，模型/网络错误不重试。失败只回退到预算合格的输入。完整环境键清单以 .env.example 为准；归档选项及维护期限见 [修复说明](remediation.md)。
 
 ## P10.2 容量与运维入口
 
 | 环境变量 | 默认值 | 校验与用途 |
 | --- | --- | --- |
-| `CAGENT_CAPACITY_RUNS` | 64 | 1–100000，包含等待远端任务的本地运行维护循环 |
+| `CAGENT_CAPACITY_RUNS` | 64 | 1–100000，限制生成阶段，等待与维护释放槽位 |
+| `CAGENT_MAINTENANCE_WORKERS` | 32 | 1–100000，独立限制本地任务维护 |
 | `CAGENT_CAPACITY_MODELS` | 16 | 1–100000，主模型与摘要模型共享，包含整个流读取过程 |
 | `CAGENT_CAPACITY_OBSERVATIONS` | 32 | 1–100000，跨 Run 的后台任务观察上限 |
 | `CAGENT_HTTP_MAX_SUBSCRIPTIONS` | 256 | 1–100000，HTTP 服务的 SSE 订阅上限 |

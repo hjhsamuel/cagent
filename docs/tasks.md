@@ -20,7 +20,7 @@ P9 的代码与本地验收已完成。使用真实 MongoDB 8.0.32 临时副本�
 2. Runtime.Resume 加载原分支检查点，校验完整调用关联，仅合并一个结果。同步 Emit 由 ApplyTask 原子保存工具结果消息、新检查点、AppliedAt、delivery=applied 和事件。Resume 本身不调用模型。
 3. 全部依赖到齐的分支才可 Recover；新 Runner 恢复 SDK 会话，并发送包含真实工具响应的历史。已接纳结果只出现一次，已执行调用 ID 保留在去重集合中，模型轮数预算跨暂停保留。
 
-`cagent.adk.tools.v1` 保存原模型/上下文、SDK 日志和状态、实际模型历史、整批句柄、已接纳响应及模型调用计数。兼容 P8 缺少新字段的快照，历史由初始上下文与 SDK 工具事件重建。完成检查点仍为 `adk-go/2.4.0/completed/v1`，恢复该边界只结算 Run，不重新调用模型。
+`cagent.adk.tools.v2` 保存原模型/上下文、SDK 日志和状态、实际模型历史、整批句柄、已接纳响应、模型调用计数及安全失败标记；仍读取 v1。混合调用的不确定错误跨重启保留，先补齐句柄再结算失败。完成检查点仍为 `adk-go/2.4.0/completed/v1`，恢复该边界只结算 Run，不重新调用模型。
 
 同名 Agent 的不同 Invocation 各有检查点。一个分支接纳全部依赖后，立即停止本轮其他未结束的观察并推进该分支；其他任务下轮从原句柄/游标继续。只有所有未完成分支都在等待依赖时才聚合为 waiting_tool；所有分支完成才释放会话占用。应用层分支调度测试使用运行时替身验证独立路由，真实 ADK 测试另外验证带父调用标识的双任务接纳与新 Runner 恢复。当前启动配置仍使用已有的 ADK Agent 装配。
 
@@ -67,7 +67,7 @@ input_required/auth_required 是暂停，不是失败。已有 input/authorizati
 | CAGENT_TASKS_OBSERVATION_TIMEOUT | 30s | 单次订阅、查询和取消请求，不限制远端任务寿命 |
 | CAGENT_TASKS_RECONNECT_BACKOFF | 1s | 观察失败退避、运行维护失败重试、启动恢复扫描间隔 |
 
-未新增环境变量。当前全局运行并发/容量策略仍属于 P10；本项限制单 Run 任务观察并发及分页内存。
+本地维护使用新增 `CAGENT_MAINTENANCE_*` 参数，完整默认值、退出语义及升级顺序见 [修复说明](remediation.md)。
 
 ## 验证
 

@@ -52,13 +52,14 @@ func assertInvalid(t *testing.T, err error, field string) {
 
 func TestDefaultsAndRequiredDeploymentSettings(t *testing.T) {
 	want := config.Config{
-		Capacity: config.Capacity{Runs: 64, Models: 16, Observations: 32},
-		Logging:  config.Logging{Level: "info", Path: "/app/logs/cagent.log", Size: 50, Rolls: 3},
-		HTTP:     config.HTTP{Login: config.Login{TokenTTL: time.Hour}, MaxSubscriptions: 256, Address: "127.0.0.1:8080", SSEHeartbeat: 15 * time.Second, ShutdownGrace: 30 * time.Second, WriteTimeout: 10 * time.Second, MaxBodyBytes: 1 << 20},
-		MongoDB:  config.MongoDB{Database: "cagent"},
-		Agent:    config.Agent{Name: "cagent", MaxTokensField: "max_tokens", RequestTimeout: 2 * time.Minute},
-		Tasks:    config.Tasks{PollInterval: 2 * time.Second, ObservationTimeout: 30 * time.Second, ReconnectBackoff: time.Second},
-		Context:  config.Context{WindowTokens: 8192, OutputTokens: 2048, ToolTokens: 1024, SafetyTokens: 512, PolicyVersion: "v1", CompressionThresholdPercent: 80, KeepRecentRounds: 2, SummaryWindowTokens: 8192, SummaryOutputTokens: 512},
+		Capacity:    config.Capacity{Runs: 64, Models: 16, Observations: 32},
+		Logging:     config.Logging{Level: "info", Path: "/app/logs/cagent.log", Size: 50, Rolls: 3},
+		HTTP:        config.HTTP{Login: config.Login{TokenTTL: time.Hour}, MaxSubscriptions: 256, Address: "127.0.0.1:8080", SSEHeartbeat: 15 * time.Second, ShutdownGrace: 30 * time.Second, WriteTimeout: 10 * time.Second, MaxBodyBytes: 1 << 20},
+		MongoDB:     config.MongoDB{Database: "cagent"},
+		Agent:       config.Agent{Name: "cagent", MaxTokensField: "max_tokens", RequestTimeout: 2 * time.Minute},
+		Tasks:       config.Tasks{PollInterval: 2 * time.Second, ObservationTimeout: 30 * time.Second, ReconnectBackoff: time.Second},
+		Maintenance: config.Maintenance{Workers: 32, CancelGrace: 5 * time.Minute, DetachedGrace: 24 * time.Hour, OutageGrace: 30 * time.Minute, InteractionGrace: 24 * time.Hour, MaxBackoff: 5 * time.Minute},
+		Context:     config.Context{WindowTokens: 8192, OutputTokens: 2048, ToolTokens: 1024, SafetyTokens: 512, PolicyVersion: "v1", CompressionThresholdPercent: 80, KeepRecentRounds: 2, SummaryWindowTokens: 8192, SummaryOutputTokens: 512},
 	}
 	if got := config.Defaults(); !reflect.DeepEqual(got, want) {
 		t.Fatal("default contract changed")
@@ -115,13 +116,14 @@ func TestEveryEnvironmentOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := config.Config{
-		Capacity: config.Capacity{Runs: 64, Models: 16, Observations: 32},
-		Logging:  config.Logging{Level: "debug", Path: "logs/custom.log", Size: 10, Rolls: 0},
-		HTTP:     config.HTTP{Login: config.Login{TokenTTL: time.Hour}, MaxSubscriptions: 256, Address: "[::1]:9090", SSEHeartbeat: 750 * time.Millisecond, ShutdownGrace: 90 * time.Second, WriteTimeout: 10 * time.Second, MaxBodyBytes: 1 << 20},
-		MongoDB:  config.MongoDB{URI: values["CAGENT_MONGODB_URI"], Database: "custom"},
-		Agent:    config.Agent{Name: "assistant", MaxTokensField: "max_tokens", RequestTimeout: 2 * time.Minute},
-		Tasks:    config.Tasks{PollInterval: 3 * time.Second, ObservationTimeout: 45 * time.Second, ReconnectBackoff: 1500 * time.Millisecond},
-		Context:  config.Context{WindowTokens: 32000, OutputTokens: 4000, ToolTokens: 2000, SafetyTokens: 500, PolicyVersion: "v2", CompressionThresholdPercent: 80, KeepRecentRounds: 2, SummaryWindowTokens: 8192, SummaryOutputTokens: 512},
+		Capacity:    config.Capacity{Runs: 64, Models: 16, Observations: 32},
+		Logging:     config.Logging{Level: "debug", Path: "logs/custom.log", Size: 10, Rolls: 0},
+		HTTP:        config.HTTP{Login: config.Login{TokenTTL: time.Hour}, MaxSubscriptions: 256, Address: "[::1]:9090", SSEHeartbeat: 750 * time.Millisecond, ShutdownGrace: 90 * time.Second, WriteTimeout: 10 * time.Second, MaxBodyBytes: 1 << 20},
+		MongoDB:     config.MongoDB{URI: values["CAGENT_MONGODB_URI"], Database: "custom"},
+		Agent:       config.Agent{Name: "assistant", MaxTokensField: "max_tokens", RequestTimeout: 2 * time.Minute},
+		Tasks:       config.Tasks{PollInterval: 3 * time.Second, ObservationTimeout: 45 * time.Second, ReconnectBackoff: 1500 * time.Millisecond},
+		Maintenance: config.Maintenance{Workers: 32, CancelGrace: 5 * time.Minute, DetachedGrace: 24 * time.Hour, OutageGrace: 30 * time.Minute, InteractionGrace: 24 * time.Hour, MaxBackoff: 5 * time.Minute},
+		Context:     config.Context{WindowTokens: 32000, OutputTokens: 4000, ToolTokens: 2000, SafetyTokens: 500, PolicyVersion: "v2", CompressionThresholdPercent: 80, KeepRecentRounds: 2, SummaryWindowTokens: 8192, SummaryOutputTokens: 512},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatal("environment override did not reach expected field")
@@ -289,9 +291,11 @@ func TestLoadReadsProcessEnvironment(t *testing.T) {
 		"CAGENT_MONGODB_URI": "mongodb://localhost:27017", "CAGENT_MONGODB_DATABASE": "test",
 		"CAGENT_AGENT_REQUEST_TIMEOUT": "2m", "CAGENT_AGENT_NAME": "test", "CAGENT_AGENT_PROVIDER": "test",
 		"CAGENT_TASKS_POLL_INTERVAL": "1s", "CAGENT_TASKS_OBSERVATION_TIMEOUT": "5s", "CAGENT_TASKS_RECONNECT_BACKOFF": "2s",
+		"CAGENT_MAINTENANCE_WORKERS": "32", "CAGENT_MAINTENANCE_CANCEL_GRACE": "5m", "CAGENT_MAINTENANCE_DETACHED_GRACE": "24h", "CAGENT_MAINTENANCE_OUTAGE_GRACE": "30m", "CAGENT_MAINTENANCE_INTERACTION_GRACE": "24h", "CAGENT_MAINTENANCE_MAX_BACKOFF": "5m",
 		"CAGENT_CONTEXT_WINDOW_TOKENS": "100", "CAGENT_CONTEXT_OUTPUT_TOKENS": "10", "CAGENT_CONTEXT_TOOL_TOKENS": "0",
 		"CAGENT_CONTEXT_SAFETY_TOKENS": "1", "CAGENT_CONTEXT_POLICY_VERSION": "test",
 		"CAGENT_CONTEXT_COMPRESSION_THRESHOLD_PERCENT": "80", "CAGENT_CONTEXT_KEEP_RECENT_ROUNDS": "2",
+		"CAGENT_CONTEXT_ARCHIVE_COMPLETED":     "false",
 		"CAGENT_CONTEXT_SUMMARY_WINDOW_TOKENS": "8192", "CAGENT_CONTEXT_SUMMARY_OUTPUT_TOKENS": "512",
 	} {
 		t.Setenv(key, value)

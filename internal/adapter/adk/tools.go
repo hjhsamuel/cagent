@@ -32,7 +32,12 @@ type PendingTool struct {
 }
 type PendingTools []PendingTool
 
-const PendingCheckpointFormat = "cagent.adk.tools.v1"
+const PendingCheckpointFormat = "cagent.adk.tools.v2"
+const legacyPendingCheckpointFormat = "cagent.adk.tools.v1"
+
+func IsPendingCheckpoint(cp domain.Checkpoint) bool {
+	return cp.Format == PendingCheckpointFormat || cp.Format == legacyPendingCheckpointFormat
+}
 
 type pendingCheckpoint struct {
 	// Contents 保存实际发给模型的历史，Results 保存已经原子接纳的工具响应。
@@ -48,6 +53,8 @@ type pendingCheckpoint struct {
 	Caller   domain.AgentExecution
 	SDK      sdkSnapshot
 	Tools    PendingTools
+	// Failure is a safe classification, never a provider diagnostic or credential.
+	Failure string `json:",omitempty"`
 }
 type toolRun struct {
 	mu      sync.Mutex
@@ -86,7 +93,7 @@ func (b *bridge) IsLongRunning() bool  { return false }
 func (b *bridge) DefersResponse() bool { return true }
 func (b *bridge) Declaration() *genai.FunctionDeclaration {
 	var schema any
-	_ = json.Unmarshal(b.desc.InputSchema, &schema)
+	_ = decodeJSON(b.desc.InputSchema, &schema)
 	return &genai.FunctionDeclaration{Name: b.Name(), Description: b.Description(), ParametersJsonSchema: schema}
 }
 func (b *bridge) ProcessRequest(ctx sdkagent.Context, r *model.LLMRequest) error {

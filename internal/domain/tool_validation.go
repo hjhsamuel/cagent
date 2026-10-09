@@ -145,6 +145,12 @@ func (o ToolOutcome) ValidateForCall(c ToolCall) error {
 // Validate 校验任务及嵌套调用的作用域、句柄和可选结果关联。
 // 此方法不推断任务状态，不把观察错误或取消请求转换成远端终态。
 func (t Task) Validate() error {
+	if t.Maintenance != "" && t.Maintenance != MaintenanceActive && t.Maintenance != MaintenanceQuarantined && t.Maintenance != MaintenanceSettled {
+		return apperrors.New(apperrors.ErrInvalidArgument, "task.maintenance", "unknown maintenance state")
+	}
+	if t.ConsecutiveErrors < 0 || t.CancelAttempts < 0 {
+		return apperrors.New(apperrors.ErrInvalidArgument, "task.maintenance", "invalid attempt count")
+	}
 	if err := t.Scope.Validate(); err != nil {
 		return err
 	}

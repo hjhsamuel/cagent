@@ -7,6 +7,7 @@ import (
 	"github.com/hjhsamuel/cagent/internal/store"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 // Recovery 是独立管理连接，必须使用仅内部恢复/保留流程可获得的配置和数据库身份。
@@ -32,20 +33,24 @@ func (r *Recovery) Scan(ctx context.Context, after *store.RecoveryPosition, limi
 	}
 	ctx, cancel := context.WithTimeout(ctx, r.b.timeout)
 	defer cancel()
-	match := bson.M{"$or": bson.A{bson.M{"status": bson.M{"$nin": bson.A{domain.RunCompleted, domain.RunFailed, domain.RunCancelled}}}, bson.M{"unsettled": bson.M{"$gt": 0}}}}
+	now, err := r.b.now(ctx)
+	if err != nil {
+		return out, safeError(err)
+	}
+	match := bson.M{"recovery": true, "next_action_at": bson.M{"$lte": now}}
 	if after != nil {
-		match = bson.M{"$and": bson.A{match, bson.M{"$or": bson.A{bson.M{"tenant_id": bson.M{"$gt": after.TenantID}}, bson.M{"tenant_id": after.TenantID, "user_id": bson.M{"$gt": after.UserID}}, bson.M{"tenant_id": after.TenantID, "user_id": after.UserID, "id": bson.M{"$gt": after.RunID}}}}}}
+		match["$or"] = bson.A{bson.M{"next_action_at": bson.M{"$gt": after.NextActionAt}}, bson.M{"next_action_at": after.NextActionAt, "tenant_id": bson.M{"$gt": after.TenantID}}, bson.M{"next_action_at": after.NextActionAt, "tenant_id": after.TenantID, "user_id": bson.M{"$gt": after.UserID}}, bson.M{"next_action_at": after.NextActionAt, "tenant_id": after.TenantID, "user_id": after.UserID, "id": bson.M{"$gt": after.RunID}}}
 	}
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: match}},
+		{{Key: "$sort", Value: bson.D{{Key: "next_action_at", Value: 1}, {Key: "tenant_id", Value: 1}, {Key: "user_id", Value: 1}, {Key: "id", Value: 1}}}},
 		{{Key: "$lookup", Value: bson.M{"from": "run_leases", "let": bson.M{"t": "$tenant_id", "u": "$user_id", "r": "$id"}, "pipeline": mongo.Pipeline{{{Key: "$match", Value: bson.M{"$expr": bson.M{"$and": bson.A{bson.M{"$eq": bson.A{"$tenant_id", "$$t"}}, bson.M{"$eq": bson.A{"$user_id", "$$u"}}, bson.M{"$eq": bson.A{"$id", "$$r"}}}}}}}}, "as": "lease"}}},
 		{{Key: "$unwind", Value: bson.M{"path": "$lease", "preserveNullAndEmptyArrays": true}}},
 		{{Key: "$match", Value: bson.M{"$expr": bson.M{"$lte": bson.A{bson.M{"$ifNull": bson.A{"$lease.expires_at", bson.DateTime(0)}}, "$$NOW"}}}}},
-		{{Key: "$sort", Value: bson.D{{Key: "tenant_id", Value: 1}, {Key: "user_id", Value: 1}, {Key: "id", Value: 1}}}},
 		{{Key: "$limit", Value: limit + 1}},
-		{{Key: "$project", Value: bson.M{"_id": 0, "tenant_id": 1, "user_id": 1, "id": 1}}},
+		{{Key: "$project", Value: bson.M{"_id": 0, "tenant_id": 1, "user_id": 1, "id": 1, "next_action_at": 1}}},
 	}
-	cur, err := r.b.collection(RunCollection).Aggregate(ctx, pipeline)
+	cur, err := r.b.collection(RunCollection).Aggregate(ctx, pipeline, options.Aggregate().SetHint("recovery_due"))
 	if err != nil {
 		return out, safeError(err)
 	}
@@ -64,7 +69,7 @@ func (r *Recovery) Scan(ctx context.Context, after *store.RecoveryPosition, limi
 			return out, invariant()
 		}
 		out.Items = append(out.Items, store.RecoveryCandidate{Scope: s, RunID: d.ID})
-		out.Next = &store.RecoveryPosition{TenantID: d.Tenant, UserID: d.User, RunID: d.ID}
+		out.Next = &store.RecoveryPosition{TenantID: d.Tenant, UserID: d.User, RunID: d.ID, NextActionAt: d.NextActionAt}
 	}
 	return out, nil
 }
@@ -83,7 +88,7 @@ func (r *Recovery) PruneEvents(ctx context.Context, scope domain.Scope, id strin
 		var storedRun domain.Run
 		err := r.b.collection(RunCollection).FindOne(tx, key(scope, id)).Decode(&old)
 		if err == nil {
-			err = old.decode(&storedRun)
+			err = r.b.decode(tx, old, &storedRun)
 		}
 		if err != nil {
 			return err

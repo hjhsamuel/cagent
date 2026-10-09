@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hjhsamuel/cagent/internal/apperrors"
@@ -30,9 +31,11 @@ type Options struct {
 // Database 仅暴露普通作用域内能力，不包含跨租户恢复扫描或事件清理。
 // 调用方停止业务后 Close；本对象不会自行启动后台运行、工具或恢复循环。
 type Database struct {
-	client  *mongo.Client
-	db      *mongo.Database
-	timeout time.Duration
+	client    *mongo.Client
+	db        *mongo.Database
+	timeout   time.Duration
+	eventOnce sync.Once
+	eventHub  *eventHub
 	// beforeCommit 仅由同包集成测试安装，用于在真实事务提交前注入故障。
 	// 生产构造函数始终为 nil；测试不得在请求并发运行时修改它。
 	beforeCommit func(string) error
@@ -49,10 +52,19 @@ func Open(ctx context.Context, cfg Options) (*Database, error) {
 		_ = b.Close(context.Background())
 		return nil, err
 	}
+	if err = b.migrateRecovery(ctx); err != nil {
+		_ = b.Close(context.Background())
+		return nil, err
+	}
+	if err = b.migrateContextMetadata(ctx); err != nil {
+		_ = b.Close(context.Background())
+		return nil, err
+	}
 	return b, nil
 }
 
 func (b *Database) Close(ctx context.Context) error {
+	b.notifications().stop()
 	ctx, cancel := context.WithTimeout(ctx, b.timeout)
 	defer cancel()
 	return safeError(b.client.Disconnect(ctx))

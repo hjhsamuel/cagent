@@ -21,7 +21,7 @@ func (b *Database) BindSessionModel(ctx context.Context, scope domain.Scope, id,
 		if err := b.collection(SessionCollection).FindOne(tx, key(scope, id)).Decode(&old); err != nil {
 			return err
 		}
-		if err := old.decode(&result); err != nil {
+		if err := b.decode(tx, old, &result); err != nil {
 			return err
 		}
 		if result.ModelID != "" || result.APIKeyID != "" {

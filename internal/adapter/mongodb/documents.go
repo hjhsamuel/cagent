@@ -15,6 +15,14 @@ func pack(scope domain.Scope, id string, value any, version int64) (document, er
 	raw, err := bson.Marshal(value)
 	d := document{Tenant: scope.TenantID, User: scope.UserID, ID: id, Schema: schema.DocumentVersion, Data: raw, Version: version}
 	setModelBinding(&d, value)
+	if m, ok := value.(domain.Message); ok {
+		d.ContextProtected = m.Role == domain.RoleUser
+		for _, part := range m.Parts {
+			if part.Kind == domain.PartToolCall || part.Kind == domain.PartToolResult {
+				d.ContextProtected = true
+			}
+		}
+	}
 	return d, err
 }
 

@@ -2,6 +2,7 @@ package contextengine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -62,6 +63,12 @@ func (b *Builder) Prepare(ctx context.Context, in Input) (Prepared, error) {
 	if in.Session.ActiveRunID != "" && in.Session.ActiveRunID != in.RunID {
 		return Prepared{}, invalid("context.run_id")
 	}
+	if in.VerifiedPrefix < 0 || in.HistoryThrough < 0 {
+		return Prepared{}, invalid("context.window")
+	}
+	if in.VerifiedPrefix > 0 && (in.Snapshot == nil || in.Snapshot.PolicyVersion != in.PolicyVersion || in.Snapshot.ValidatedThrough < in.VerifiedPrefix || in.Snapshot.ThroughSequence < in.VerifiedPrefix || in.HistoryThrough <= in.VerifiedPrefix) {
+		return Prepared{}, invalid("context.window")
+	}
 	// 对所有消息先去重，系统配置不得伪装为带序号/Run 的历史消息。
 	ids := make(map[string]bool)
 	for _, m := range in.System {
@@ -86,6 +93,8 @@ func (b *Builder) Prepare(ctx context.Context, in Input) (Prepared, error) {
 	calls := make(map[callKey]call)
 	keepTool := make([]bool, len(in.History))
 	currentSeen, currentUser := false, false
+	var sequence int64
+	runThrough := make(map[string]int64)
 	for i, m := range in.History {
 		if err = ctx.Err(); err != nil {
 			return Prepared{}, err
@@ -93,9 +102,15 @@ func (b *Builder) Prepare(ctx context.Context, in Input) (Prepared, error) {
 		if err = m.ValidateForSession(in.Session); err != nil {
 			return Prepared{}, err
 		}
-		if m.Sequence != int64(i)+1 || ids[m.ID] {
+		expected := sequence + 1
+		if m.Sequence > in.VerifiedPrefix {
+			expected = max(expected, in.VerifiedPrefix+1)
+		}
+		if m.Sequence <= sequence || (m.Sequence > in.VerifiedPrefix && m.Sequence != expected) || ids[m.ID] {
 			return Prepared{}, invalid("context.history.sequence")
 		}
+		sequence = m.Sequence
+		runThrough[m.RunID] = sequence
 		ids[m.ID] = true
 		if m.RunID == in.RunID {
 			if !currentSeen && m.Role != domain.RoleUser {
@@ -152,6 +167,9 @@ func (b *Builder) Prepare(ctx context.Context, in Input) (Prepared, error) {
 	if !currentUser {
 		return Prepared{}, invalid("context.current_input")
 	}
+	if in.VerifiedPrefix > 0 && sequence != in.HistoryThrough {
+		return Prepared{}, invalid("context.history.sequence")
+	}
 	var through int64
 	var snapshot *domain.ContextSnapshot
 	if in.Snapshot != nil {
@@ -159,7 +177,7 @@ func (b *Builder) Prepare(ctx context.Context, in Input) (Prepared, error) {
 		if err = s.ValidateForSession(in.Session); err != nil {
 			return Prepared{}, err
 		}
-		if s.Version <= 0 || s.ThroughSequence <= 0 || s.ThroughSequence > int64(len(in.History)) || s.TokenEstimate < 0 || strings.TrimSpace(s.Summary) == "" || s.PolicyVersion != in.PolicyVersion {
+		if s.Version <= 0 || s.ThroughSequence <= 0 || s.ThroughSequence > sequence || s.TokenEstimate < 0 || strings.TrimSpace(s.Summary) == "" || s.PolicyVersion != in.PolicyVersion {
 			return Prepared{}, invalid("context.snapshot")
 		}
 		through = s.ThroughSequence
@@ -185,8 +203,24 @@ func (b *Builder) Prepare(ctx context.Context, in Input) (Prepared, error) {
 	for i, m := range in.History {
 		// 摘要可以覆盖普通旧消息，但不能替换任何工具对、待完成调用或当前运行输入。
 		// 保留整个承载消息，避免同一 assistant 消息中的文本和多个并行调用被拆散。
-		if m.Sequence > through || keepTool[i] || m.RunID == in.RunID || (in.PreserveUsers && m.Role == domain.RoleUser) {
+		archived := in.ArchiveCompleted && m.Sequence <= through && runThrough[m.RunID] <= through && in.RunStates[m.RunID].IsTerminal()
+		if !archived && (m.Sequence > through || keepTool[i] || m.RunID == in.RunID || (in.PreserveUsers && m.Role == domain.RoleUser)) {
 			messages = append(messages, cloneMessage(m))
+			if m.RunID != in.RunID && in.RunStates[m.RunID].IsTerminal() {
+				var responses []domain.Part
+				for _, p := range m.Parts {
+					if p.Kind != domain.PartToolCall || calls[callKey{m.RunID, p.ToolCallID}].resolved {
+						continue
+					}
+					data, _ := json.Marshal(map[string]any{"local_run_status": in.RunStates[m.RunID], "remote_outcome": "unknown", "error": "The local run ended without accepting a tool result. Do not replay this call."})
+					responses = append(responses, domain.Part{Kind: domain.PartToolResult, ToolCallID: p.ToolCallID, ToolName: p.ToolName, Data: data})
+				}
+				if len(responses) > 0 {
+					closed := derived("closed-"+m.ID, domain.RoleTool, "")
+					closed.RunID, closed.Parts = m.RunID, responses
+					messages = append(messages, closed)
+				}
+			}
 		}
 	}
 	// 隔离计数器持有/改写切片的影响；计数契约仍要求只读、准确，不假装校验其算法。

@@ -17,6 +17,8 @@ cagent 是使用 Go 构建的多租户、多用户 Agent 服务。它通过 HTTP
 
 MCP 当前支持 HTTP Streamable Transport 的工具发现与普通调用，不支持 MCP tasks。A2A 支持 JSON-RPC 即时结果、长任务观察、取消和暂停交互。服务支持 API 登录生成随机身份 JWT，不提供 A2A 服务端。
 
+任务维护退出、SSE 通知、上下文增量读取及存储格式升级见 [P1/P2 修复与升级说明](docs/remediation.md)。
+
 ## 代码目录结构
 
 ```text

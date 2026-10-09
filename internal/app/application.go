@@ -10,11 +10,11 @@ import (
 	"github.com/hjhsamuel/cagent/internal/agent"
 	"github.com/hjhsamuel/cagent/internal/apperrors"
 	"github.com/hjhsamuel/cagent/internal/config"
+	"github.com/hjhsamuel/cagent/internal/contextengine"
 	"github.com/hjhsamuel/cagent/internal/domain"
 	"github.com/hjhsamuel/cagent/internal/observability"
 	"github.com/hjhsamuel/cagent/internal/store"
 	"github.com/hjhsamuel/cagent/internal/tool"
-	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -29,6 +29,7 @@ type Options struct {
 	Capacity      config.Capacity
 	Registry      tool.Registry
 	Tasks         config.Tasks
+	Maintenance   config.Maintenance
 	LeaseDuration time.Duration
 	PollInterval  time.Duration
 	Prepare       func(context.Context, domain.Run) (agent.Request, error)
@@ -41,6 +42,8 @@ type Options struct {
 type Application struct {
 	runs         *observability.Gate
 	observations *observability.Gate
+	maintenance  *observability.Gate
+	workers      *observability.Gate
 	db           *mongodb.Database
 	runtime      agent.Runtime
 	events       *DurableEvents
@@ -52,6 +55,7 @@ type Application struct {
 	closed       bool
 	closeDone    chan struct{}
 	active       map[runKey]context.CancelFunc
+	due          map[runKey]time.Time
 	wg           sync.WaitGroup
 }
 type runKey struct {
@@ -61,6 +65,12 @@ type runKey struct {
 
 // NewService 不自行打开数据库；parent 必须为进程生命周期上下文，不能是请求上下文。
 func NewService(parent context.Context, db *mongodb.Database, runtime agent.Runtime, opts Options) (*Application, error) {
+	if opts.Maintenance == (config.Maintenance{}) {
+		opts.Maintenance = config.Defaults().Maintenance
+	}
+	if err := opts.Maintenance.Validate(); err != nil {
+		return nil, err
+	}
 	if opts.Capacity == (config.Capacity{}) {
 		opts.Capacity = config.Defaults().Capacity
 	}
@@ -81,7 +91,10 @@ func NewService(parent context.Context, db *mongodb.Database, runtime agent.Runt
 		return nil, err
 	}
 	ctx, stop := context.WithCancel(parent)
-	return &Application{runs: observability.NewGate(opts.Capacity.Runs, "run"), observations: observability.NewGate(opts.Capacity.Observations, "observation"), db: db, runtime: runtime, events: events, opts: opts, owner: newID(), ctx: ctx, stop: stop, active: make(map[runKey]context.CancelFunc), closeDone: make(chan struct{})}, nil
+	a := &Application{runs: observability.NewGate(opts.Capacity.Runs, "run"), workers: observability.NewGate(opts.Capacity.Runs+opts.Maintenance.Workers, "worker"), maintenance: observability.NewGate(opts.Maintenance.Workers, "maintenance"), observations: observability.NewGate(opts.Capacity.Observations, "observation"), db: db, runtime: runtime, events: events, opts: opts, owner: newID(), ctx: ctx, stop: stop, active: make(map[runKey]context.CancelFunc), due: make(map[runKey]time.Time), closeDone: make(chan struct{})}
+	a.wg.Add(1)
+	go a.runDue()
+	return a, nil
 }
 func newID() string { return bson.NewObjectID().Hex() }
 
@@ -196,13 +209,17 @@ func (a *Application) RecoverRun(ctx context.Context, scope domain.Scope, id str
 	if err != nil {
 		return err
 	}
-	if run.Status.IsTerminal() && a.opts.Registry == nil {
-		return nil
-	}
 	if !run.Status.IsTerminal() && run.Status != domain.RunQueued && a.opts.Recover == nil {
 		return apperrors.New(apperrors.ErrUnsupported, "run.recovery", "checkpoint recovery is not configured")
 	}
-	if !a.schedule(scope, id) {
+	var release func()
+	if run.Status == domain.RunQueued {
+		release, err = a.runs.Try(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	if !a.scheduleReserved(scope, id, release, ctx) {
 		if a.ctx.Err() != nil {
 			return a.ctx.Err()
 		}
@@ -232,68 +249,21 @@ func (a *Application) scheduleReserved(scope domain.Scope, id string, release fu
 		}
 		return true
 	}
-	if release == nil {
-		var err error
-		release, err = a.runs.Try(a.ctx)
-		if err != nil {
-			return false
+	workerRelease, err := a.workers.Try(a.ctx)
+	if err != nil {
+		if release != nil {
+			release()
 		}
+		if len(a.due) < 4096 {
+			a.due[key] = time.Now().Add(a.opts.Tasks.ReconnectBackoff)
+		}
+		return false
 	}
+	delete(a.due, key)
 	ctx, cancel := context.WithCancel(observability.Link(a.ctx, traceContext))
 	a.active[key] = cancel
 	a.wg.Add(1)
-	go func() {
-		defer a.wg.Done()
-		defer release()
-		ctx, finish := observability.Default.Start(ctx, "run")
-		var runErr error
-		defer func() { finish(runErr) }()
-		defer func() { cancel(); a.mu.Lock(); delete(a.active, key); a.mu.Unlock() }()
-		for a.ctx.Err() == nil {
-			if ctx.Err() != nil {
-				a.mu.Lock()
-				ctx, cancel = context.WithCancel(a.ctx)
-				a.active[key] = cancel
-				a.mu.Unlock()
-			}
-			waiting, err := a.maintainTasks(ctx, scope, id)
-			if err == nil && !waiting {
-				err = a.execute(ctx, scope, id)
-			}
-			runErr = err
-			if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, apperrors.ErrConflict) {
-				logrus.WithFields(logrus.Fields{"tenant_id": scope.TenantID, "user_id": scope.UserID, "run_id": id}).WithError(err).Warn("运行执行或任务观察暂时中断")
-			}
-			if a.opts.Registry == nil || a.ctx.Err() != nil {
-				return
-			}
-			// 显式取消只停止本次生成/观察；保留服务级循环处理迟到任务。
-			if ctx.Err() != nil {
-				a.mu.Lock()
-				ctx, cancel = context.WithCancel(a.ctx)
-				a.active[key] = cancel
-				a.mu.Unlock()
-			}
-			run, e := a.db.GetRun(ctx, scope, id)
-			if e != nil {
-				return
-			}
-			page, e := a.db.ListUnsettledTasks(ctx, scope, id, store.KeyPage{Limit: 1})
-			if e != nil {
-				return
-			}
-			if run.Status.IsTerminal() && len(page.Items) == 0 {
-				return
-			}
-			delay := a.opts.Tasks.PollInterval
-			if err != nil {
-				delay = a.opts.Tasks.ReconnectBackoff
-			}
-			if waitTask(a.ctx, delay) != nil {
-				return
-			}
-		}
-	}()
+	go a.runScheduled(ctx, cancel, key, release, workerRelease)
 	return true
 }
 
@@ -405,7 +375,18 @@ func (a *Application) execute(parent context.Context, scope domain.Scope, id str
 		if e != nil {
 			err = e
 		} else {
+			if failure, ok := a.runtime.(interface{ CheckpointFailure(domain.Checkpoint) error }); ok {
+				for _, cp := range cps {
+					if failure.CheckpointFailure(cp) != nil {
+						request = agent.Request{Run: run, Caller: cp.Caller, Checkpoint: &cp}
+						break
+					}
+				}
+			}
 			for _, cp := range cps {
+				if failure, ok := a.runtime.(interface{ CheckpointFailure(domain.Checkpoint) error }); ok && request.Checkpoint != nil && failure.CheckpointFailure(*request.Checkpoint) != nil {
+					break
+				}
 				if len(cp.PendingCallIDs) == 0 && !a.checkpointComplete(cp) {
 					request = agent.Request{Run: run, Caller: cp.Caller, Checkpoint: &cp}
 					break
@@ -530,10 +511,14 @@ func (a *Application) execute(parent context.Context, scope domain.Scope, id str
 			}
 			return commit(domain.RunRunning, events, messages, update.Checkpoint)
 		}
+		batch := newDeltaBatch(ctx, emit)
 		if recovering {
-			err = a.opts.Recover(ctx, request, emit)
+			err = a.opts.Recover(ctx, request, batch.Emit)
 		} else {
-			err = a.runtime.Execute(ctx, request, emit)
+			err = a.runtime.Execute(ctx, request, batch.Emit)
+		}
+		if flushErr := batch.Finish(); flushErr != nil {
+			err = flushErr
 		}
 		emitMu.Lock()
 		accepting = false
@@ -569,6 +554,9 @@ func (a *Application) execute(parent context.Context, scope domain.Scope, id str
 	}
 	if errors.Is(err, agent.ErrUncertain) {
 		terminal = []domain.Event{{Scope: scope, RunID: id, Kind: domain.EventRunFailed, Data: []byte(`{"reason":"execution_outcome_uncertain","retry_tool":false}`)}}
+	}
+	if errors.Is(err, contextengine.ErrBudgetExceeded) {
+		terminal = []domain.Event{{Scope: scope, RunID: id, Kind: domain.EventRunFailed, Data: []byte(`{"reason":"context_budget_exceeded","retry_tool":false}`)}}
 	}
 	if e := commit(status, terminal, nil, nil); e != nil {
 		return e

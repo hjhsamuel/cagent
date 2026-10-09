@@ -125,7 +125,7 @@ func (r *sessionModels) prepare(ctx context.Context, run domain.Run) (agent.Requ
 	if err != nil {
 		return agent.Request{}, err
 	}
-	opts.PreserveUsers = true
+	opts.PreserveUsers = !opts.ArchiveCompleted
 	var engine contextengine.Engine
 	if opts.Compression != nil {
 		engine, err = contextengine.NewCompressing(runtime, opts.Summarizer, *opts.Compression)
@@ -195,7 +195,7 @@ func (r *sessionModels) CheckpointComplete(cp domain.Checkpoint) bool {
 	return cp.Format == adk.CheckpointFormat && len(cp.PendingCallIDs) == 0
 }
 func (r *sessionModels) PendingTasks(req agent.Request) ([]domain.Task, error) {
-	if req.Checkpoint == nil || req.Checkpoint.Format != adk.PendingCheckpointFormat {
+	if req.Checkpoint == nil || !adk.IsPendingCheckpoint(*req.Checkpoint) {
 		return nil, nil
 	}
 	selected, err := r.selection(r.parent, req)
@@ -208,3 +208,5 @@ func (r *sessionModels) PendingTasks(req agent.Request) ([]domain.Task, error) {
 	}
 	return runtime.PendingTasks(req)
 }
+
+func (*sessionModels) CheckpointFailure(cp domain.Checkpoint) error { return adk.CheckpointFailure(cp) }

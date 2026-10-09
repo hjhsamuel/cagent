@@ -41,7 +41,7 @@ func (b *Database) ListCheckpoints(ctx context.Context, scope domain.Scope, id s
 	}
 	for _, doc := range docs {
 		var cp domain.Checkpoint
-		if e = doc.decode(&cp); e != nil {
+		if e = b.decode(ctx, doc, &cp); e != nil {
 			return store.CheckpointPage{}, safeError(e)
 		}
 		out.Items = append(out.Items, cp)

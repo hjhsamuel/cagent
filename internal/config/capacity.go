@@ -1,7 +1,7 @@
 package config
 
-// Capacity 是本实例硬上限；等待远端任务的 Run 也占运行槽位，避免长任务积累
-// 无界 goroutine。远端任务没有 TTL；本实例满载时恢复候选留待后续扫描。
+// Capacity bounds active generation, model requests and observations separately.
+// Waiting tasks release Runs capacity; Maintenance has its own worker bound.
 type Capacity struct{ Runs, Models, Observations int }
 
 func (c Capacity) Validate() error {

@@ -11,13 +11,14 @@ type Config struct {
 	// ToolsFile 是可选可信工具清单路径；空值禁用工具。文件不接受 HTTP 请求覆盖。
 	ToolsFile string
 	// Capacity 限制单实例资源；多实例总容量为各实例之和。
-	Capacity Capacity
-	Logging  Logging
-	HTTP     HTTP
-	MongoDB  MongoDB
-	Agent    Agent
-	Tasks    Tasks
-	Context  Context
+	Capacity    Capacity
+	Logging     Logging
+	HTTP        HTTP
+	MongoDB     MongoDB
+	Agent       Agent
+	Tasks       Tasks
+	Maintenance Maintenance
+	Context     Context
 	// ModelEncryption 只保存版本化 AES 密钥的环境配置，禁止整体打印。
 	ModelEncryption ModelEncryption
 	// Models 是 MongoDB 模型目录，不包含默认模型。
@@ -85,6 +86,9 @@ type Tasks struct {
 // Context 定义模型窗口与预留预算；窗口和输出从 MongoDB 模型加载，工具与安全预留可为零。
 // 扣除全部预留后至少留一个输入 Token；实际计数与模型窗口匹配由模型适配器负责。
 type Context struct {
+	// ArchiveCompleted permits complete terminal rounds to be represented by a
+	// derived summary. Original persistent messages are retained. Default is false.
+	ArchiveCompleted bool
 	// CompressionThresholdPercent 为 0 时禁用压缩，1–100 表示输入预算触发百分比。
 	CompressionThresholdPercent int
 	// KeepRecentRounds 包含当前用户轮次；用户原文、工具消息和当前 Run 永远保留。
@@ -112,12 +116,13 @@ type Context struct {
 // Token 默认值只是初始预算，部署时必须根据所选模型调整，不代表任何模型的能力。
 func Defaults() Config {
 	return Config{
-		Capacity: Capacity{Runs: 64, Models: 16, Observations: 32},
-		Logging:  Logging{Level: "info", Path: "/app/logs/cagent.log", Size: 50, Rolls: 3},
-		HTTP:     HTTP{Login: Login{TokenTTL: time.Hour}, MaxSubscriptions: 256, Address: "127.0.0.1:8080", SSEHeartbeat: 15 * time.Second, ShutdownGrace: 30 * time.Second, WriteTimeout: 10 * time.Second, MaxBodyBytes: 1 << 20},
-		MongoDB:  MongoDB{Database: "cagent"},
-		Agent:    Agent{Name: "cagent", MaxTokensField: "max_tokens", RequestTimeout: 2 * time.Minute},
-		Tasks:    Tasks{PollInterval: 2 * time.Second, ObservationTimeout: 30 * time.Second, ReconnectBackoff: time.Second},
-		Context:  Context{WindowTokens: 8192, OutputTokens: 2048, ToolTokens: 1024, SafetyTokens: 512, PolicyVersion: "v1", CompressionThresholdPercent: 80, KeepRecentRounds: 2, SummaryWindowTokens: 8192, SummaryOutputTokens: 512},
+		Capacity:    Capacity{Runs: 64, Models: 16, Observations: 32},
+		Logging:     Logging{Level: "info", Path: "/app/logs/cagent.log", Size: 50, Rolls: 3},
+		HTTP:        HTTP{Login: Login{TokenTTL: time.Hour}, MaxSubscriptions: 256, Address: "127.0.0.1:8080", SSEHeartbeat: 15 * time.Second, ShutdownGrace: 30 * time.Second, WriteTimeout: 10 * time.Second, MaxBodyBytes: 1 << 20},
+		MongoDB:     MongoDB{Database: "cagent"},
+		Agent:       Agent{Name: "cagent", MaxTokensField: "max_tokens", RequestTimeout: 2 * time.Minute},
+		Tasks:       Tasks{PollInterval: 2 * time.Second, ObservationTimeout: 30 * time.Second, ReconnectBackoff: time.Second},
+		Maintenance: Maintenance{Workers: 32, CancelGrace: 5 * time.Minute, DetachedGrace: 24 * time.Hour, OutageGrace: 30 * time.Minute, InteractionGrace: 24 * time.Hour, MaxBackoff: 5 * time.Minute},
+		Context:     Context{WindowTokens: 8192, OutputTokens: 2048, ToolTokens: 1024, SafetyTokens: 512, PolicyVersion: "v1", CompressionThresholdPercent: 80, KeepRecentRounds: 2, SummaryWindowTokens: 8192, SummaryOutputTokens: 512},
 	}
 }

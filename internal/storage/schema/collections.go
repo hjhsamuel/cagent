@@ -14,4 +14,5 @@ const (
 	MutationReceiptCollection = "mutation_receipts"
 	LeaseCollection           = "run_leases"
 	ClockCollection           = "clock"
+	PayloadCollection         = "immutable_payloads"
 )

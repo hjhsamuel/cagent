@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hjhsamuel/cagent/internal/domain"
+	"github.com/hjhsamuel/cagent/internal/storage/schema"
 	"github.com/hjhsamuel/cagent/internal/store"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -78,10 +79,10 @@ func (b *Database) receipt(ctx context.Context, scope domain.Scope, runID, op st
 		return store.CommitResult{}, false, err
 	}
 	var rDoc document
-	var r store.MutationReceipt
+	var r persistedReceipt
 	err := b.collection(MutationReceiptCollection).FindOne(ctx, key(scope, compositeID(runID, op))).Decode(&rDoc)
 	if err == nil {
-		err = rDoc.decode(&r)
+		err = b.decode(ctx, rDoc, &r)
 	}
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return store.CommitResult{}, false, nil
@@ -89,13 +90,45 @@ func (b *Database) receipt(ctx context.Context, scope domain.Scope, runID, op st
 	if err != nil {
 		return store.CommitResult{}, false, err
 	}
-	if err = r.Match(scope, runID, op, kind, digest); err != nil {
+	if err = r.MutationReceipt.Match(scope, runID, op, kind, digest); err != nil {
 		return store.CommitResult{}, false, err
+	}
+	if r.Format != 0 && r.Format != 1 {
+		if r.Format != 2 || r.ResultRef == nil {
+			return store.CommitResult{}, false, invariant()
+		}
+		raw, e := b.readPayload(ctx, scope, r.ResultRef)
+		if e != nil {
+			return store.CommitResult{}, false, e
+		}
+		if e = bson.Unmarshal(raw, &r.Result); e != nil {
+			return store.CommitResult{}, false, e
+		}
 	}
 	return r.Result, true, nil
 }
+
+type persistedReceipt struct {
+	store.MutationReceipt `bson:",inline"`
+	Format                int                `bson:"receipt_format,omitempty"`
+	ResultRef             *schema.PayloadRef `bson:"result_ref,omitempty"`
+}
+
 func (b *Database) saveReceipt(ctx context.Context, scope domain.Scope, runID, op string, kind store.MutationKind, digest [32]byte, result store.CommitResult) error {
-	r := store.MutationReceipt{Scope: scope, RunID: runID, OperationID: op, Kind: kind, Digest: digest, Result: result}
+	raw, err := bson.Marshal(result)
+	if err != nil {
+		return err
+	}
+	r := persistedReceipt{MutationReceipt: store.MutationReceipt{Scope: scope, RunID: runID, OperationID: op, Kind: kind, Digest: digest}, Format: 1}
+	if len(raw) <= 64<<10 {
+		r.Result = result
+	} else {
+		r.Format = 2
+		r.ResultRef, err = b.writePayload(ctx, scope, raw)
+		if err != nil {
+			return err
+		}
+	}
 	d, err := pack(scope, compositeID(runID, op), r, 1)
 	if err != nil {
 		return err
@@ -113,11 +146,18 @@ func (b *Database) saveRun(ctx context.Context, run *domain.Run, old document, u
 	}
 	run.Version = v
 	run.UpdatedAt = now
+	if run.Status.IsTerminal() && run.TerminatedAt.IsZero() {
+		run.TerminatedAt = now
+	}
 	updated, err = repack(updated, *run, v)
 	if err != nil {
 		return err
 	}
 	updated.Status = string(run.Status)
+	updated.Recovery = !run.Status.IsTerminal() || updated.Unsettled > 0
+	if run.Status.IsTerminal() || updated.NextActionAt.IsZero() {
+		updated.NextActionAt = now
+	}
 	oldUpdate, err := b.collection(RunCollection).ReplaceOne(ctx, old.versionKey(), updated)
 	if err == nil && oldUpdate.MatchedCount != 1 {
 		err = conflict("version")
@@ -169,7 +209,7 @@ func (b *Database) output(ctx context.Context, run domain.Run, expected int64, m
 	var s domain.Session
 	err := b.collection(SessionCollection).FindOne(ctx, key(run.Scope, run.SessionID)).Decode(&old)
 	if err == nil {
-		err = old.decode(&s)
+		err = b.decode(ctx, old, &s)
 	}
 	if err != nil {
 		return nil, 0, err
@@ -245,7 +285,7 @@ func (b *Database) checkpoint(ctx context.Context, run domain.Run, next domain.C
 	var current domain.Checkpoint
 	err := b.collection(CheckpointCollection).FindOne(ctx, key(run.Scope, id)).Decode(&old)
 	if err == nil {
-		err = old.decode(&current)
+		err = b.decode(ctx, old, &current)
 	}
 	exists := err == nil
 	if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {
@@ -283,7 +323,7 @@ func (b *Database) checkpoint(ctx context.Context, run domain.Run, next domain.C
 		return next, false, err
 	}
 	next.UpdatedAt = now
-	d, err := pack(run.Scope, id, next, next.Version)
+	d, err := b.packCheckpoint(ctx, run.Scope, id, next, next.Version)
 	if err != nil {
 		return next, false, err
 	}

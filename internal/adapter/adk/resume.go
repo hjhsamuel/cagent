@@ -18,7 +18,7 @@ import (
 func (r *Runtime) pending(req agent.Request) (pendingCheckpoint, error) {
 	var saved pendingCheckpoint
 	cp := req.Checkpoint
-	if cp == nil || cp.Format != PendingCheckpointFormat {
+	if cp == nil || !IsPendingCheckpoint(*cp) {
 		return saved, unsupported("checkpoint.format")
 	}
 	if e := cp.ValidateForRun(req.Run); e != nil {
@@ -27,7 +27,7 @@ func (r *Runtime) pending(req agent.Request) (pendingCheckpoint, error) {
 	if cp.Caller != req.Caller || cp.Version <= 0 {
 		return saved, invalid("checkpoint.identity")
 	}
-	if e := json.Unmarshal(cp.Data, &saved); e != nil {
+	if e := decodeJSON(cp.Data, &saved); e != nil {
 		return saved, invalid("checkpoint.data")
 	}
 	if saved.Model != r.model.Name() || saved.Scope != req.Run.Scope || saved.RunID != req.Run.ID || saved.Caller != req.Caller {
@@ -57,7 +57,7 @@ func (r *Runtime) pending(req agent.Request) (pendingCheckpoint, error) {
 // PendingTasks 从整批持久句柄补齐逐个 TrackTask 的崩溃窗口。
 // 返回原调用，不执行工具；调用方仍须通过 TrackTask 的唯一键去重。
 func (r *Runtime) PendingTasks(req agent.Request) ([]domain.Task, error) {
-	if req.Checkpoint == nil || req.Checkpoint.Format != PendingCheckpointFormat {
+	if req.Checkpoint == nil || !IsPendingCheckpoint(*req.Checkpoint) {
 		return nil, nil
 	}
 	saved, e := r.pending(req)

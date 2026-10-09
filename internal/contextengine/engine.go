@@ -11,8 +11,8 @@ import (
 // 工具定义等未放入 Messages 的开销由 ToolTokens 预留，不能重复计算。
 type Budget struct{ WindowTokens, OutputTokens, ToolTokens, SafetyTokens int }
 
-// Input 必须提供从序号 1 开始的完整、有序持久历史，不能只提供摘要后的尾部：
-// 只有完整历史才能发现摘要覆盖的未完成调用和跨摘要边界的工具结果。
+// Input normally starts at sequence 1. Only a scoped repository window and a
+// validated compatible snapshot may authorize gaps in the covered prefix.
 // RunID 指当前运行，必须在历史中存在 user 输入，且之后不能出现其他运行。
 // System 是可信管理配置，独立于持久历史；PolicyVersion 用于拒绝不兼容摘要。
 type Input struct {
@@ -24,7 +24,15 @@ type Input struct {
 	Budget        Budget
 	PolicyVersion string
 	// PreserveUsers 在压缩策略中保留全部用户原文，不依赖模型判断哪些要求重要。
-	PreserveUsers bool
+	PreserveUsers    bool
+	ArchiveCompleted bool
+	// VerifiedPrefix is provided only by the scoped repository window reader.
+	// HistoryThrough is the session's message watermark from that same snapshot.
+	VerifiedPrefix int64
+	HistoryThrough int64
+	// RunStates are loaded in the same scoped session by the trusted preparer.
+	// Missing entries cannot authorize closing unresolved historical calls.
+	RunStates map[string]domain.RunStatus
 }
 
 // Prepared 所有可变数据均独立于输入。EstimatedTokens 来自注入计数器对最终

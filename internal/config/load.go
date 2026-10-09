@@ -23,6 +23,13 @@ func LoadFromEnv(lookup func(string) (string, bool), names ...string) (Config, e
 		return Config{}, invalid("environment", "environment lookup is required")
 	}
 	c := Defaults()
+	if value, present := lookup("CAGENT_CONTEXT_ARCHIVE_COMPLETED"); present {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return Config{}, invalid("context.archive_completed", "must be a boolean")
+		}
+		c.Context.ArchiveCompleted = parsed
+	}
 	logging, err := LoadLoggingFromEnv(lookup)
 	if err != nil {
 		return Config{}, err
@@ -60,6 +67,11 @@ func LoadFromEnv(lookup func(string) (string, bool), names ...string) (Config, e
 		{"CAGENT_TASKS_POLL_INTERVAL", "tasks.poll_interval", &c.Tasks.PollInterval},
 		{"CAGENT_TASKS_OBSERVATION_TIMEOUT", "tasks.observation_timeout", &c.Tasks.ObservationTimeout},
 		{"CAGENT_TASKS_RECONNECT_BACKOFF", "tasks.reconnect_backoff", &c.Tasks.ReconnectBackoff},
+		{"CAGENT_MAINTENANCE_CANCEL_GRACE", "maintenance.cancel_grace", &c.Maintenance.CancelGrace},
+		{"CAGENT_MAINTENANCE_DETACHED_GRACE", "maintenance.detached_grace", &c.Maintenance.DetachedGrace},
+		{"CAGENT_MAINTENANCE_OUTAGE_GRACE", "maintenance.outage_grace", &c.Maintenance.OutageGrace},
+		{"CAGENT_MAINTENANCE_INTERACTION_GRACE", "maintenance.interaction_grace", &c.Maintenance.InteractionGrace},
+		{"CAGENT_MAINTENANCE_MAX_BACKOFF", "maintenance.max_backoff", &c.Maintenance.MaxBackoff},
 	} {
 		if value, present := lookup(item.key); present {
 			parsed, err := time.ParseDuration(value)
@@ -75,6 +87,7 @@ func LoadFromEnv(lookup func(string) (string, bool), names ...string) (Config, e
 		dst        *int
 	}{
 		{"CAGENT_CAPACITY_RUNS", "capacity.runs", &c.Capacity.Runs},
+		{"CAGENT_MAINTENANCE_WORKERS", "maintenance.workers", &c.Maintenance.Workers},
 		{"CAGENT_CAPACITY_MODELS", "capacity.models", &c.Capacity.Models},
 		{"CAGENT_CAPACITY_OBSERVATIONS", "capacity.observations", &c.Capacity.Observations},
 		{"CAGENT_HTTP_MAX_SUBSCRIPTIONS", "http.max_subscriptions", &c.HTTP.MaxSubscriptions},

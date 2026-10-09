@@ -24,6 +24,7 @@ type Run struct {
 	Version        int64
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	TerminatedAt   time.Time
 }
 
 type EventKind string

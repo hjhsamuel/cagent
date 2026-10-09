@@ -59,7 +59,7 @@ func NewOpenAI(cfg config.Agent, client *http.Client) (*OpenAIModel, error) {
 			return nil, invalid("model.thinking")
 		}
 		thinking = &config.Thinking{}
-		if err := json.Unmarshal(data, thinking); err != nil {
+		if err := decodeJSON(data, thinking); err != nil {
 			return nil, invalid("model.thinking")
 		}
 	}

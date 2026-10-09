@@ -2,14 +2,16 @@ package store
 
 import (
 	"github.com/hjhsamuel/cagent/internal/domain"
+	"time"
 )
 
 // RecoveryPosition 使用持久资源身份组成的二进制字典序游标，避免只按 RunID
 // 在多租户扫描时遗漏同名运行；不得来自 HTTP 参数或普通仓储的空 Scope。
 type RecoveryPosition struct {
-	TenantID string
-	UserID   string
-	RunID    string
+	TenantID     string
+	UserID       string
+	RunID        string
+	NextActionAt time.Time
 }
 
 // RecoveryCandidate 只给出后续作用域内加载需要的身份，不包含提示词或凭据。

@@ -53,7 +53,7 @@ Catalog 在 List、Resolve、Execute 和任务操作处重验身份，缓存下�
 
 实际返回 TaskHandle 后，桥接层记录 Scope、Session、Run、Agent/Invocation/ParentInvocation、CallID 和原参数，停止下一次模型调用。ADK v2.4.0 的工具 Context 不支持 `EndInvocation()`；实现使用 BeforeModel 边界截停，并有真实 SDK 测试证明不会额外调用模型。
 
-`cagent.adk.tools.v1` 检查点包含暂停时模型名、准备后的原上下文、SDK 会话快照与所有已返回句柄，避免恢复依赖已改变的配置/摘要。默认 `Update.Tasks` 由应用在当前租约/Fence 下调用已有 `Database.TrackTask`：每个任务与检查点及 `tool.waiting` 事件同事务保存，PendingCallIDs 逐项增加。事件返回本地 `task_id/tool_call_id/invocation_id`，不公开远端句柄。也可通过 `ToolOptions.Handoff` 注入负责持久化的回调。`agent.ErrWaiting` 让应用保留 `waiting_tool` 和会话占用，不能提交 completed。
+`cagent.adk.tools.v2` 检查点包含暂停时模型名、准备后的原上下文、SDK 会话快照、所有已返回句柄及安全失败分类，继续读取 v1。默认 `Update.Tasks` 由应用在当前租约/Fence 下调用已有 `Database.TrackTask`：每个任务与检查点及 `tool.waiting` 事件同事务保存，PendingCallIDs 逐项增加。事件返回本地 `task_id/tool_call_id/invocation_id`，不公开远端句柄。也可通过 `ToolOptions.Handoff` 注入负责持久化的回调。`agent.ErrWaiting` 让应用保留 `waiting_tool` 和会话占用，不能提交 completed；混合调用发生失败时先保存已知句柄，再按失败分类结束 Run，恢复时仍维护原任务。
 
 多任务交接不是整批原子事务：每个 TrackTask 原子保存一个任务，SDK Data 同时保存整批已返回句柄。中途故障后，P9 从检查点补齐缺失的 Task 行，不重执行工具；Run 已取消时也可补齐并结算迟到结果。远端已启动但任何句柄尚未落库的窗口仍需提供方幂等/关联查询支持，当前不声称外部副作用恰好一次。
 

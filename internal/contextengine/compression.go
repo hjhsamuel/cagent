@@ -22,7 +22,7 @@ type CompressionPolicy struct {
 	KeepRecentRounds int
 }
 
-// CompressingBuilder 可并发复用，每次最多一次摘要请求。摘要失败时只回退到已经
+// CompressingBuilder 可并发复用，摘要预算拒绝时允许最多 32 次受限分段尝试。失败只回退到已经
 // 通过预算检查的输入；无可用回退则返回错误，不裁掉用户要求或工具关联。
 type CompressingBuilder struct {
 	builder *Builder
@@ -43,26 +43,27 @@ func NewCompressing(counter TokenCounter, summary Summarizer, policy Compression
 	return &CompressingBuilder{builder: b, summary: summary, policy: policy}, nil
 }
 
-// Prepare 从完整原始前缀重新摘要，不叠加旧摘要，避免跨策略沿用失真内容。
+// Compatible validated prefixes use incremental summaries. A policy change
+// rebuilds from original history; persistence still uses the previous CAS version.
 // 旧快照版本始终作为保存的 CAS 基线；策略变化可以重算同一水位，但不能倒退。
 func (b *CompressingBuilder) Prepare(ctx context.Context, in Input) (Prepared, error) {
-	in.PreserveUsers = true
+	in.PreserveUsers = !in.ArchiveCompleted
 	var through int64
 	rounds := 0
 	for i := len(in.History) - 1; i >= 0; i-- {
 		if in.History[i].Role == domain.RoleUser {
 			rounds++
 			if rounds == b.policy.KeepRecentRounds {
-				through = int64(i)
+				through = in.History[i].Sequence - 1
 				break
 			}
 		}
 	}
 	// 当前运行所有消息都是不可压缩内容；摘要只能覆盖它之前的已完成历史。
-	for i, m := range in.History {
+	for _, m := range in.History {
 		if m.RunID == in.RunID {
-			if through > int64(i) {
-				through = int64(i)
+			if through >= m.Sequence {
+				through = m.Sequence - 1
 			}
 			break
 		}
@@ -73,7 +74,7 @@ func (b *CompressingBuilder) Prepare(ctx context.Context, in Input) (Prepared, e
 		if err := previous.ValidateForSession(in.Session); err != nil {
 			return Prepared{}, err
 		}
-		if previous.Version <= 0 || previous.ThroughSequence <= 0 || previous.ThroughSequence > int64(len(in.History)) || previous.TokenEstimate < 0 || strings.TrimSpace(previous.Summary) == "" || strings.TrimSpace(previous.PolicyVersion) == "" {
+		if previous.Version <= 0 || previous.ThroughSequence <= 0 || len(in.History) == 0 || previous.ThroughSequence > in.History[len(in.History)-1].Sequence || previous.TokenEstimate < 0 || strings.TrimSpace(previous.Summary) == "" || strings.TrimSpace(previous.PolicyVersion) == "" {
 			return Prepared{}, invalid("context.snapshot")
 		}
 	}
@@ -103,7 +104,12 @@ func (b *CompressingBuilder) Prepare(ctx context.Context, in Input) (Prepared, e
 	}
 	// 没有可替换的普通 assistant 消息时，摘要只会增加开销，直接保持原输入。
 	removable := false
-	for _, m := range in.History[:through] {
+	var prefix []domain.Message
+	for _, m := range in.History {
+		if m.Sequence > through {
+			break
+		}
+		prefix = append(prefix, m)
 		plain := m.Role == domain.RoleAssistant
 		for _, p := range m.Parts {
 			if p.Kind == domain.PartToolCall || p.Kind == domain.PartToolResult {
@@ -111,18 +117,45 @@ func (b *CompressingBuilder) Prepare(ctx context.Context, in Input) (Prepared, e
 			}
 		}
 		removable = removable || plain
+		if in.ArchiveCompleted && in.RunStates[m.RunID].IsTerminal() {
+			removable = true
+		}
 	}
 	if !removable {
 		return fallback(baseErr)
 	}
 	version := int64(0)
+	archiveValid := in.ArchiveCompleted
+	prefixRuns := make(map[string]bool)
+	if archiveValid {
+		for _, m := range prefix {
+			prefixRuns[m.RunID] = true
+			if !in.RunStates[m.RunID].IsTerminal() {
+				archiveValid = false
+			}
+		}
+		for _, m := range in.History {
+			if m.Sequence > through && prefixRuns[m.RunID] {
+				archiveValid = false
+			}
+		}
+	}
 	if previous != nil {
 		version = previous.Version
 	}
 	if version < 0 || version == math.MaxInt64 {
 		return Prepared{}, invalid("context.snapshot.version")
 	}
-	text, err := b.summary.Summarize(ctx, cloneMessages(in.History[:through]))
+	if in.VerifiedPrefix > 0 && in.Snapshot != nil {
+		source := []domain.Message{{Scope: in.Session.Scope, ID: "previous-summary", SessionID: in.Session.ID, Role: domain.RoleUser, Parts: []domain.Part{{Kind: domain.PartText, Text: "此前已验证历史的派生摘要：\n" + in.Snapshot.Summary}}}}
+		for _, m := range prefix {
+			if m.Sequence > in.VerifiedPrefix {
+				source = append(source, m)
+			}
+		}
+		prefix = source
+	}
+	text, err := summarizeSegments(ctx, b.summary, cloneMessages(prefix))
 	if err != nil {
 		return fallback(err)
 	}
@@ -130,7 +163,7 @@ func (b *CompressingBuilder) Prepare(ctx context.Context, in Input) (Prepared, e
 		return fallback(invalid("context.summary"))
 	}
 	next := domain.ContextSnapshot{Scope: in.Session.Scope, ID: "context-" + in.RunID, SessionID: in.Session.ID,
-		ThroughSequence: through, Summary: text, PolicyVersion: in.PolicyVersion, Version: version + 1}
+		ThroughSequence: through, ValidatedThrough: through, Archived: archiveValid, Summary: text, PolicyVersion: in.PolicyVersion, Version: version + 1}
 	in.Snapshot = &next
 	prepared, err := b.builder.Prepare(ctx, in)
 	if err != nil {

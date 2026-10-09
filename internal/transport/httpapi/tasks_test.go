@@ -12,8 +12,8 @@ import (
 
 type tasksStub struct {
 	stubService
-	gets, cancels int
-	scope         domain.Scope
+	gets, cancels, resumes int
+	scope                  domain.Scope
 }
 
 func (s *tasksStub) GetTask(_ context.Context, scope domain.Scope, id string) (domain.Task, error) {
@@ -32,6 +32,14 @@ func (s *tasksStub) CancelTask(_ context.Context, scope domain.Scope, id string)
 	}
 	return nil
 }
+func (s *tasksStub) ResumeTaskMaintenance(_ context.Context, scope domain.Scope, id string) error {
+	s.resumes++
+	s.scope = scope
+	if id == "missing" {
+		return apperrors.ErrNotFound
+	}
+	return nil
+}
 
 func TestTaskReadCancelRoutes(t *testing.T) {
 	stub := &tasksStub{}
@@ -43,7 +51,7 @@ func TestTaskReadCancelRoutes(t *testing.T) {
 		method, path string
 		auth         bool
 		want         int
-	}{{"GET", "/api/v1/tasks/id", false, 401}, {"POST", "/api/v1/tasks/id/cancel", false, 401}, {"GET", "/api/v1/tasks/missing", true, 404}, {"POST", "/api/v1/tasks/missing/cancel", true, 404}, {"GET", "/api/v1/tasks/id", true, 200}, {"POST", "/api/v1/tasks/id/cancel", true, 202}} {
+	}{{"GET", "/api/v1/tasks/id", false, 401}, {"POST", "/api/v1/tasks/id/cancel", false, 401}, {"POST", "/api/v1/tasks/id/resume-observation", false, 401}, {"GET", "/api/v1/tasks/missing", true, 404}, {"POST", "/api/v1/tasks/missing/cancel", true, 404}, {"POST", "/api/v1/tasks/missing/resume-observation", true, 404}, {"GET", "/api/v1/tasks/id", true, 200}, {"POST", "/api/v1/tasks/id/cancel", true, 202}, {"POST", "/api/v1/tasks/id/resume-observation", true, 202}} {
 		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(`{"remote_id":"forged","scope":"forged"}`))
 		if tc.auth {
 			req.Header.Set("Authorization", "Bearer "+token(t))
@@ -68,7 +76,7 @@ func TestTaskReadCancelRoutes(t *testing.T) {
 			}
 		}
 	}
-	if stub.gets != 2 || stub.cancels != 2 || stub.scope != (domain.Scope{TenantID: "tenant", UserID: "user"}) {
+	if stub.gets != 2 || stub.cancels != 2 || stub.resumes != 2 || stub.scope != (domain.Scope{TenantID: "tenant", UserID: "user"}) {
 		t.Fatal(stub)
 	}
 }

@@ -42,9 +42,9 @@ func TestCompressionOpenAIServicePersistsBeforeGeneration(t *testing.T) {
 			t.Error(e)
 		}
 		if body.Model == "summary-model" {
-			summaries.Add(1)
-			if body.Stream || len(body.Messages) != 2 || !strings.Contains(body.Messages[1].Content, long) {
-				t.Error("summary did not read original history")
+			number := summaries.Add(1)
+			if body.Stream || len(body.Messages) != 2 || (number == 1 && !strings.Contains(body.Messages[1].Content, long)) || (number == 2 && (!strings.Contains(body.Messages[1].Content, "recorded facts") || strings.Contains(body.Messages[1].Content, long))) {
+				t.Error("summary did not use the expected original or incremental source")
 			}
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprint(w, `{"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"recorded facts"}}]}`)
