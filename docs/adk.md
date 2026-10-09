@@ -8,7 +8,7 @@ P6 的代码、真实 ADK SDK 行为测试、本地 HTTP 协议测试及 MongoDB
 
 通过 `app.NewOpenAIService(parent, db, cfg, system, lifecycle)` 组合 P4 生命周期、P5 上下文准备、ADK Runner/LLMAgent 和 OpenAI 客户端。`parent` 是服务生命周期，`system` 必须来自可信配置；数据库应已连接并完成索引初始化。构造过程不会调用模型。租约与轮询仍使用 `app.Options`；该工厂不允许覆盖已装配的 Prepare/Recover 回调。测试或后续提供方可通过 `NewADKService` 注入 ADK Runtime。
 
-ADK 自带 OpenAI 适配采用 Responses，本项目按用户要求使用 Chat Completions 兼容接口，通过官方 OpenAI Go SDK 实现 ADK `model.LLM`。请求路径为配置的 API 前缀加 `/chat/completions`；不要把完整方法路径填入 BaseURL。请求支持标准文本 SSE 和非流式文本，执行链路使用 SSE。参考 [Chat Completions 官方接口](https://developers.openai.com/api/reference/go/resources/chat/subresources/completions/methods/create)。
+ADK 模型由 `pkg/llm/openai.NewModel` 提供，装配时显式选择 `APIChatCompletions`，作为 `model.LLM` 注入 Runner/LLMAgent。`internal/adapter/adk` 只保留配置装配、容量治理、观测与错误脱敏策略，协议转换和 HTTP 请求由公共包负责。请求路径为配置的 API 前缀加 `/chat/completions`；不要把完整方法路径填入 BaseURL。请求支持标准文本 SSE 和非流式文本，执行链路使用 SSE。参考 [Chat Completions 官方接口](https://developers.openai.com/api/reference/go/resources/chat/subresources/completions/methods/create)。
 
 ## 动态模型配置
 

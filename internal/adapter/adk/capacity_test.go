@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+
+	"google.golang.org/adk/v2/model"
 )
 
 // 模型闸门覆盖整个流消费过程；超载不得触发 HTTP，消费者提前停止后必须关闭流并归还槽位。
@@ -20,20 +22,18 @@ func TestSharedModelCapacityAndEarlyConsumerRelease(t *testing.T) {
 		sse(w, "hello", "stop")
 	}))
 	defer server.Close()
-	m, err := NewOpenAI(openAIConfig(server.URL), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	summary, err := NewOpenAI(openAIConfig(server.URL), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	gate := observability.NewGate(1)
-	m.SetCapacity(gate)
-	summary.SetCapacity(gate)
+	m, err := NewOpenAI(openAIConfig(server.URL), nil, gate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary, err := NewOpenAI(openAIConfig(server.URL), nil, gate)
+	if err != nil {
+		t.Fatal(err)
+	}
 	mapped, _ := mapMessages(request("u").Messages, m.Name())
 	hold, _ := gate.Try(context.Background())
-	for _, client := range []*OpenAIModel{m, summary} {
+	for _, client := range []model.LLM{m, summary} {
 		var got error
 		for _, e := range client.GenerateContent(context.Background(), mapped, true) {
 			got = e

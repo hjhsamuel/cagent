@@ -17,6 +17,8 @@ package completions
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"strings"
 
 	"github.com/hjhsamuel/cagent/pkg/llm/openai/shared"
 	"github.com/openai/openai-go/v3"
@@ -107,8 +109,14 @@ func functionCallArgs(raw string) (map[string]any, error) {
 		return map[string]any{}, nil
 	}
 	args := map[string]any{}
-	if err := json.Unmarshal([]byte(raw), &args); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&args); err != nil {
 		return nil, fmt.Errorf("%w: %w", shared.ErrFunctionCallArgs, err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return nil, shared.ErrFunctionCallArgs
 	}
 	if args == nil {
 		// The payload was JSON null: the call takes no arguments.

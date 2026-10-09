@@ -86,11 +86,10 @@ func buildOpenAIRuntime(cfg config.Config, system []domain.Part, gate *observabi
 	if cfg.Context.CompressionEnabled && cfg.Agent.WindowTokens <= 0 {
 		return nil, ContextOptions{}, invalid("model.config.window_tokens")
 	}
-	llm, err := adk.NewOpenAI(cfg.Agent, nil)
+	llm, err := adk.NewOpenAI(cfg.Agent, nil, gate)
 	if err != nil {
 		return nil, ContextOptions{}, err
 	}
-	llm.SetCapacity(gate)
 	runtime, err := adk.New(llm, tools...)
 	if err != nil {
 		return nil, ContextOptions{}, err
@@ -108,11 +107,10 @@ func buildOpenAIRuntime(cfg config.Config, system []domain.Part, gate *observabi
 		if cfg.Context.SummaryModel != "" {
 			summaryCfg.Model = cfg.Context.SummaryModel
 		}
-		summaryLLM, e := adk.NewOpenAI(summaryCfg, nil)
+		summaryLLM, e := adk.NewOpenAI(summaryCfg, nil, gate)
 		if e != nil {
 			return nil, ContextOptions{}, e
 		}
-		summaryLLM.SetCapacity(gate)
 		opts.Summarizer, e = adk.NewSummaryModel(summaryLLM)
 		if e != nil {
 			return nil, ContextOptions{}, e

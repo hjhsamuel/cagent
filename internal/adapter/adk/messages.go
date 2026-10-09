@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 
@@ -50,6 +51,9 @@ type modelError struct{ cause error }
 func (e *modelError) Error() string        { return ErrModel.Error() }
 func (e *modelError) Unwrap() error        { return e.cause }
 func (e *modelError) Is(target error) bool { return target == ErrModel }
+
+// Format 不展开密钥或提供方诊断；公共日志只展示稳定说明。
+func (e *modelError) Format(s fmt.State, _ rune) { fmt.Fprint(s, e.Error()) }
 
 // mapMessages 统一执行与恢复的消息映射，系统消息只进入 SystemInstruction。
 // 工具历史的 ID 按原 Run+CallID 映射，避免不同运行的局部 ID 冲突；原 Task 路由不变。

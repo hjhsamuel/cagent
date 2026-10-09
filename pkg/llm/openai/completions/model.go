@@ -82,6 +82,7 @@ func (m *Model) generate(ctx context.Context, params openai.ChatCompletionNewPar
 			return
 		}
 		llmResp := converters.Genai2LLMResponse(genaiResp)
+		llmResp.TurnComplete = true
 		attachMetadata(llmResp, resp)
 		yield(llmResp, nil)
 	}
@@ -218,11 +219,20 @@ func finalizeStreamResponse(final *model.LLMResponse, completion *openai.ChatCom
 // Responses path uses. The model is a plain string here, which is what the key
 // has always been documented to carry.
 func attachMetadata(resp *model.LLMResponse, completion *openai.ChatCompletion) {
-	if resp == nil || completion == nil || completion.ID == "" {
+	if resp == nil || completion == nil {
+		return
+	}
+	if completion.ID == "" && (len(completion.Choices) == 0 || completion.Choices[0].Message.Refusal == "") {
 		return
 	}
 	if resp.CustomMetadata == nil {
 		resp.CustomMetadata = map[string]any{}
+	}
+	if len(completion.Choices) > 0 && completion.Choices[0].Message.Refusal != "" {
+		resp.CustomMetadata["openai_refusal"] = true
+	}
+	if completion.ID == "" {
+		return
 	}
 	resp.CustomMetadata["openai_response_id"] = completion.ID
 	resp.CustomMetadata["openai_model"] = completion.Model

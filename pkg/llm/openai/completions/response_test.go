@@ -323,3 +323,22 @@ func TestConvertLogprobs_Absent(t *testing.T) {
 		t.Errorf("logprobs = %#v, want nil when the provider sent none", got)
 	}
 }
+
+// Tool arguments must survive the model boundary without rounding integers.
+func TestConvertCompletionPreservesToolArgumentNumbers(t *testing.T) {
+	resp := decodeCompletion(t, `{"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"n\":9007199254740993,\"nested\":{\"id\":9007199254740995}}"}}]}}]}`)
+	got, err := convertCompletion(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := got.Candidates[0].Content.Parts[0].FunctionCall.Args
+	data, err := json.Marshal(args)
+	if err != nil || !strings.Contains(string(data), "9007199254740993") || !strings.Contains(string(data), "9007199254740995") {
+		t.Fatalf("tool arguments lost precision: %s, %v", data, err)
+	}
+	for _, raw := range []string{`{"n":1} {"n":2}`, `{"n":1} trailing`} {
+		if _, err := functionCallArgs(raw); !errors.Is(err, shared.ErrFunctionCallArgs) {
+			t.Fatalf("accepted trailing tool arguments: %v", err)
+		}
+	}
+}

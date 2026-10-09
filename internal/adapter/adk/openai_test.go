@@ -17,7 +17,6 @@ import (
 	"github.com/hjhsamuel/cagent/internal/adapter/mongodb"
 	"github.com/hjhsamuel/cagent/internal/agent"
 	"github.com/hjhsamuel/cagent/internal/config"
-	"google.golang.org/adk/v2/model"
 )
 
 func openAIConfig(url string) config.Agent {
@@ -195,7 +194,7 @@ func TestOpenAIRedirectAndNonStreaming(t *testing.T) {
 			t.Fatal(e)
 		}
 		count++
-		if out.Content.Parts[0].Text != "answer" {
+		if out.Content.Parts[0].Text != "answer" || !out.TurnComplete || out.Partial {
 			t.Fatal("missing answer")
 		}
 	}
@@ -270,5 +269,3 @@ func TestRealOpenAISmoke(t *testing.T) {
 		t.Fatal("missing final model output")
 	}
 }
-
-var _ model.LLM = (*OpenAIModel)(nil)
