@@ -93,7 +93,7 @@ flowchart TD
 
 ### 数据与恢复边界
 
-MongoDB 保存 `sessions`、`messages`、`runs`、`events`、`tasks`、`context_snapshots`、`agent_checkpoints`、`task_deliveries`、`run_leases` 和 `mutation_receipts`。业务资源按租户和用户隔离；`models` 是管理员维护的全局模型目录，API key 使用 AES-GCM 加密，AES 密钥由环境注入。
+MongoDB 保存 `sessions`、`messages`、`runs`、`events`、`tasks`、`context_snapshots`、`agent_checkpoints`、`task_deliveries`、`run_leases` 和 `mutation_receipts`。业务资源按租户和用户隔离；`models` 是管理员维护的全局模型目录，API key 使用 AES-GCM 加密，AES 密钥由服务在调用轮换接口时生成并保存到 `.env`。
 
 消息在会话内、事件在 Run 内分配递增序号。检查点和交付记录用于恢复原调用及防止重复接纳结果。摘要属于派生数据，原始历史保留。外部调用结果不确定且缺少安全检查点时，运行会明确失败，不盲目重放；服务不保证外部模型或工具副作用恰好一次。
 
@@ -123,13 +123,12 @@ CAGENT_MONGODB_URI=mongodb://localhost:27017/?replicaSet=rs0
 CAGENT_MONGODB_DATABASE=cagent
 CAGENT_HTTP_ADDRESS=127.0.0.1:8080
 CAGENT_HTTP_JWT_SECRET=<至少32字节的随机秘密>
-CAGENT_MODEL_ENCRYPTION_KEY_V1=<Base64编码的随机AES密钥>
 CAGENT_LOG_PATH=./logs/cagent.log
 ```
 
-替换占位值，并使 `replicaSet` 与数据库副本集名称一致。AES 密钥支持 16、24 或 32 字节，建议使用随机 32 字节密钥。`server` 自动读取工作目录的 `.env`；优先级为默认值 < `.env` < 已设置的环境变量，显式空值不会回退。
+替换占位值，并使 `replicaSet` 与数据库副本集名称一致。无须填写 AES 密钥；首次启动后调用 `POST /debug/model-keys/rotate`，服务自动生成 32 字节 AES 密钥并保存到 `.env`，然后通过模型管理接口添加模型。启动、重启和添加模型均不会生成 AES 密钥。`server` 自动读取工作目录的 `.env`；优先级为默认值 < `.env` < 已设置的环境变量，显式空值不会回退。
 
-模型名称、API 地址、凭据和 Token 配置来自 MongoDB `models` 集合。部署管理员按 [模型配置](docs/models.md) 中的 AES-GCM 格式准备密文，填写下面文档的 `api_keys` 数组，替换端点、模型名和预算后，使用 MongoDB 管理工具写入 `cagent.models`：
+模型名称、API 地址、凭据和 Token 配置来自 MongoDB `models` 集合。推荐通过 [模型配置 HTTP API](docs/models.md#模型配置-http-api) 提交供应商 API key，由服务自动加密并保存。下面展示 MongoDB 持久化结构，端点、模型名、密文和预算均为示例：
 
 ```json
 {

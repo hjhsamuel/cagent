@@ -2,9 +2,11 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -12,6 +14,93 @@ import (
 	"github.com/hjhsamuel/cagent/internal/storage/schema"
 	"github.com/joho/godotenv"
 )
+
+type recordingModelKeyWriter struct {
+	calls int
+}
+
+func (w *recordingModelKeyWriter) ReplaceModelKeys(_ context.Context, _, _ []schema.Model) error {
+	w.calls++
+	return nil
+}
+
+func TestInitialRotationGeneratesKeysOnlyWhenCalled(t *testing.T) {
+	t.Chdir(t.TempDir())
+	const before = "# existing config\nOTHER=keep\n"
+	if err := os.WriteFile(".env", []byte(before), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, docs := modelFixture(t)
+	loaded, err := loadModels(context.Background(), fakeModels{}, cfg, config.NewDeferredKeyring(config.ModelEncryption{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := &recordingModelKeyWriter{}
+	rotate := modelKeyRotation(loaded.Models, db)
+	doc := docs["main"]
+	secret := "supplier-secret"
+	input := config.ModelInput{Model: doc.Model, Provider: doc.Provider, BaseURL: doc.BaseURL,
+		APIKeys: []config.ModelKeyInput{{ID: "key-1", Value: &secret, Weight: 1}}, Options: doc.Options}
+	var stored schema.Model
+	persistModel := func(_, updated *schema.Model) error { stored = *updated; return nil }
+	if _, err := loaded.Models.PutModelConfiguration("main", input, nil, persistModel); err == nil {
+		t.Fatal("adding a model before rotation must not generate an encryption key")
+	}
+	data, err := os.ReadFile(".env")
+	if err != nil || string(data) != before || db.calls != 0 {
+		t.Fatal("startup or model creation generated a key", err)
+	}
+	version, err := rotate(context.Background())
+	if err != nil || version != "v1" || db.calls != 1 {
+		t.Fatal("initial rotation failed", err)
+	}
+	values, err := godotenv.Read(".env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := values["CAGENT_MODEL_ENCRYPTION_KEY_V1"]
+	material, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || len(material) != 32 || values["OTHER"] != "keep" {
+		t.Fatal("rotation did not persist a 32-byte key or preserve configuration")
+	}
+	if _, err := loaded.Models.PutModelConfiguration("main", input, nil, persistModel); err != nil {
+		t.Fatal("generated key is unavailable to model administration", err)
+	}
+	// Reloading persisted keys must retain v1 without generating another version.
+	encryption, err := config.LoadModelEncryptionFromEnv(func(name string) (string, bool) {
+		value, ok := values[name]
+		return value, ok
+	}, []string{"CAGENT_MODEL_ENCRYPTION_KEY_V1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := loaded.Models.ListModelConfigurations()[0]
+	if view.APIKeys[0].Version != "v1" {
+		t.Fatal("model creation generated a new key")
+	}
+	reloaded, err := loadModels(context.Background(), fakeModels{"main": stored}, cfg, config.NewDeferredKeyring(encryption))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound, err := reloaded.Models.Bind("main", "key-1"); err != nil || bound.Agent.APIKey != secret {
+		t.Fatal("restart lost the generated key", err)
+	}
+	unchanged, err := godotenv.Read(".env")
+	if err != nil || !reflect.DeepEqual(values, unchanged) || db.calls != 1 {
+		t.Fatal("model creation or restart generated a key", err)
+	}
+	if version, err := rotate(context.Background()); err != nil || version != "v2" || db.calls != 2 {
+		t.Fatal("subsequent rotation failed", err)
+	}
+	rotated, err := godotenv.Read(".env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	material, err = base64.StdEncoding.DecodeString(rotated["CAGENT_MODEL_ENCRYPTION_KEY_V2"])
+	if err != nil || len(material) != 32 || rotated["CAGENT_MODEL_ENCRYPTION_KEY_V2"] == encoded || rotated["CAGENT_MODEL_ENCRYPTION_KEY_V1"] != encoded {
+		t.Fatal("rotation did not generate a fresh 32-byte key and retain v1")
+	}
+}
 
 func TestKeysValidatedOnUse(t *testing.T) {
 	for _, mode := range []string{"missing", "invalid_aes", "ciphertext", "nonce", "version"} {

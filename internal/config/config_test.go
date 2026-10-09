@@ -336,7 +336,7 @@ func TestDocumentedExampleLoads(t *testing.T) {
 	for name := range values {
 		names = append(names, name)
 	}
-	_, err = config.LoadFromEnv(func(key string) (string, bool) {
+	loaded, err := config.LoadFromEnv(func(key string) (string, bool) {
 		value, ok := values[key]
 		if !ok {
 			t.Errorf("example missing key %s", key)
@@ -349,5 +349,8 @@ func TestDocumentedExampleLoads(t *testing.T) {
 	}
 	if len(values) != 0 {
 		t.Fatal("example contains unknown settings")
+	}
+	if len(loaded.ModelEncryption.Keys) != 0 {
+		t.Fatal("example must not require user-provided encryption keys")
 	}
 }

@@ -106,4 +106,4 @@ P9 Task DTO 包含 `id/run_id/tool_call_id/agent_id/invocation_id/parent_invocat
 
 模型配置管理同时提供 `GET /debug/models`、`GET /debug/models/:modelID`、`PUT /debug/models/:modelID` 和 `DELETE /debug/models/:modelID`，无需认证，成功写入后本实例立即生效。PUT 接受完整模型参数和写入用 API key 明文，由服务自动加密；查询只返回 key 的 ID、版本和权重，不返回明文或密文。请求结构、错误语义及会话绑定影响见 [模型配置 HTTP API](models.md#模型配置-http-api)。
 
-`POST /debug/model-keys/rotate` 在现有 HTTP 服务内执行 AES 密钥轮换。接口无需认证；装配密钥轮换依赖后注册。请求无须 body，成功返回 `{"version":"v2"}`，失败返回 500 `model_key_rotation_failed`。接口生成新版本 AES 密钥，先写入工作目录 `.env`，再事务更新 MongoDB 密文并发布内存目录；旧版本、API key 明文、稳定 ID 和权重保留。细节和多实例操作见 [模型配置](models.md)。
+`POST /debug/model-keys/rotate` 在现有 HTTP 服务内执行 AES 密钥轮换。接口无需认证；装配密钥轮换依赖后注册。请求无须 body、密钥或版本参数，由服务在调用时自动生成默认 32 字节 AES 密钥；启动、重启和添加模型不生成密钥。首次生成成功返回 `{"version":"v1"}`，后续返回 `v2` 等版本，响应不返回密钥；失败返回 500 `model_key_rotation_failed`。接口先写入工作目录 `.env`，再事务更新 MongoDB 密文并发布内存目录；旧版本、API key 明文、稳定 ID 和权重保留。细节和多实例操作见 [模型配置](models.md)。

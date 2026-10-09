@@ -4,6 +4,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"sync/atomic"
@@ -85,14 +86,15 @@ func Run(parent context.Context, cfg config.Config) error {
 		return err
 	}
 	var stopping atomic.Bool
-	handler, err := httpapi.NewWithModelManagement(application, events, cfg.HTTP, cfg.Agent.Name, modelManagement{cfg: cfg, db: db}, modelKeyRotation(cfg.Models, db), func(ctx context.Context) bool {
-		if stopping.Load() {
-			return false
-		}
-		ctx, cancel := context.WithTimeout(ctx, time.Second)
-		defer cancel()
-		return db.Ping(ctx) == nil && !stopping.Load()
-	}, app.TaskInputs{DB: db, Registry: registry})
+	handler, err := httpapi.NewWithModelManagement(application, events, cfg.HTTP, cfg.Agent.Name,
+		modelManagement{cfg: cfg, db: db}, modelKeyRotation(cfg.Models, db), func(ctx context.Context) bool {
+			if stopping.Load() {
+				return false
+			}
+			ctx, cancel := context.WithTimeout(ctx, time.Second)
+			defer cancel()
+			return db.Ping(ctx) == nil && !stopping.Load()
+		}, app.TaskInputs{DB: db, Registry: registry})
 	if err != nil {
 		return err
 	}
@@ -101,6 +103,7 @@ func Run(parent context.Context, cfg config.Config) error {
 		return errors.New("HTTP listener could not start")
 	}
 	logrus.WithField("address", listener.Addr().String()).Info("http.listening")
+	fmt.Printf("Start server, listening at: %s\n", listener.Addr().String())
 	return serve(parent, listener, handler, cfg.HTTP.ShutdownGrace, func() { stopping.Store(true) }, func(ctx context.Context) error {
 		// serve 已消耗关闭宽限期时不在 defer 中重新等待一个完整宽限期。
 		applicationClosed = true

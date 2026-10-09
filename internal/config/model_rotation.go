@@ -9,7 +9,10 @@ import (
 	"github.com/hjhsamuel/cagent/internal/storage/schema"
 )
 
-// RotateKeys 在持久化成功后发布新目录，保留稳定凭据引用。
+// 默认生成 32 字节 AES-256 密钥，Base64 仅用于持久化编码。
+const defaultModelEncryptionKeyBytes = 32
+
+// RotateKeys 仅在调用时生成服务端密钥；持久化成功后发布新目录，保留稳定凭据引用。
 func (c *ModelCatalog) RotateKeys(persistKeys func(ModelEncryption) error, persistModels func([]schema.Model, []schema.Model) error) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -30,7 +33,7 @@ func (c *ModelCatalog) RotateKeys(persistKeys func(ModelEncryption) error, persi
 		return "", invalid("model_encryption", "version exhausted")
 	}
 	version := "v" + strconv.FormatUint(latest+1, 10)
-	material := make([]byte, 32)
+	material := make([]byte, defaultModelEncryptionKeyBytes)
 	if _, err := rand.Read(material); err != nil {
 		return "", invalid("model_encryption", "cannot generate key")
 	}
