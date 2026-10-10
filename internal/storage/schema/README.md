@@ -27,3 +27,5 @@
 会话与分支检查点的信封 `model_id`/`api_key_id` 对应载荷的 ModelID/APIKeyID。会话仅绑定主对话，子调用绑定保存在分支检查点中；两者都只保存标识，不保存明文凭据。
 
 `Document.Payload` 与内联 `data` 互斥，引用格式由 `PayloadRef.Format` 校验。回执载荷保留原操作身份与摘要，小结果内联，大结果引用不可变快照。Run 的 `recovery/next_action_at` 和消息的 `context_protected` 是可回填的查询投影，不能代替作用域、租约或版本检查。升级顺序及保留规则见 [修复说明](../../../docs/remediation.md)。
+
+`tool_connections` 使用独立 `ToolConnection` 文档，包含 `tenant_id/user_id/id/protocol/url`，可选 `card_path/credential_ref/credentials/tools`；不使用业务 Document 信封。管理员维护远端工具连接，服务启动时读取，`scope_id` 唯一索引限制同一完整 Scope 的连接 ID。`credentials` 只保存环境变量名。共享本地工具从目录读取，不写入该集合。

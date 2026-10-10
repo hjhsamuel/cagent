@@ -44,6 +44,7 @@ OpenRecovery 使用单独连接和配置，只交给内部恢复/保留流程。
 
 | 集合 | 索引与主要元数据 |
 | --- | --- |
+| tool_connections | Scope+id 唯一；管理员维护的 protocol/url/card_path/凭据环境引用/工具白名单，启动时通过 ListToolConnections 读取 |
 | sessions | Scope+id 唯一；消息计数器、data.ActiveRunID |
 | runs | Scope+id 唯一；Scope+session_id+非空 idempotency_key 条件唯一；status 查询、初始回执、事件计数/水位、unsettled 数量 |
 | messages | Scope+id 唯一；Scope+session_id+sequence 唯一 |

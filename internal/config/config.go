@@ -8,8 +8,7 @@ import "time"
 // 装配完成后应按只读值使用；直接构造或修改配置后必须再次调用 Validate。
 // MongoDB.URI 可能含凭据，禁止将整个配置格式化、序列化或写入日志。
 type Config struct {
-	// ToolsFile 是可选可信工具清单路径；空值禁用工具。文件不接受 HTTP 请求覆盖。
-	ToolsFile string
+	Tools Tools
 	// Capacity 限制单实例资源；多实例总容量为各实例之和。
 	Capacity    Capacity
 	Logging     Logging
@@ -103,6 +102,7 @@ type Context struct {
 // MongoDB URI 必须显式设置；生产启动加载模型目录，创建会话时确定模型。
 func Defaults() Config {
 	return Config{
+		Tools:       DefaultTools(),
 		Capacity:    Capacity{Runs: 64, Models: 16, Observations: 32},
 		Logging:     Logging{Level: "info", Path: "/app/logs/cagent.log", Size: 50, Rolls: 3},
 		HTTP:        HTTP{Login: Login{TokenTTL: time.Hour}, MaxSubscriptions: 256, Address: "127.0.0.1:8080", SSEHeartbeat: 15 * time.Second, ShutdownGrace: 30 * time.Second, WriteTimeout: 10 * time.Second, MaxBodyBytes: 1 << 20},

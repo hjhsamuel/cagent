@@ -1,15 +1,29 @@
-{
-  "timeout": "30s",
-  "max_input_bytes": 1048576,
-  "max_output_bytes": 1048576,
-  "max_model_calls": 16,
-  "connections": [
-    {
-      "tenant_id": "example-tenant",
-      "user_id": "example-user",
-      "id": "local-tools",
-      "protocol": "local",
-      "tools": ["echo"]
+[
+  {
+    "tenant_id": "example-tenant",
+    "user_id": "example-user",
+    "id": "mcp-tools",
+    "protocol": "mcp",
+    "url": "https://mcp.example.invalid/mcp",
+    "credential_ref": "primary",
+    "credentials": {
+      "primary": "MCP_AUTHORIZATION"
     }
-  ]
-}
+  },
+  {
+    "tenant_id": "example-tenant",
+    "user_id": "example-user",
+    "id": "research",
+    "protocol": "a2a",
+    "url": "https://agent.example.invalid",
+    "card_path": "/.well-known/agent-card.json",
+    "credential_ref": "primary",
+    "credentials": {
+      "primary": "RESEARCH_AUTHORIZATION",
+      "secondary": "RESEARCH_SECONDARY_AUTHORIZATION"
+    },
+    "tools": [
+      "remote_agent"
+    ]
+  }
+]

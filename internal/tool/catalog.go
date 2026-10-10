@@ -15,9 +15,11 @@ import (
 	"github.com/hjhsamuel/cagent/internal/observability"
 )
 
-// Entry 由可信装配代码创建，一个条目只授予一个完整 Scope。Executor 不得忽略
-// context；Catalog 不用遗留后台 goroutine 伪装超时，也不会自动重试有副作用的调用。
+// Entry 由可信装配代码创建，默认只授予一个完整 Scope；SharedLocal 仅用于共享本地工具。
+// Executor 不得忽略 context；Catalog 不用遗留后台 goroutine 伪装超时，
+// 也不会自动重试有副作用的调用。
 type Entry struct {
+	SharedLocal  bool
 	Scope        domain.Scope
 	Descriptor   Descriptor
 	ConnectionID string
@@ -54,9 +56,26 @@ func NewCatalog(entries []Entry, limits Limits) (*Catalog, error) {
 	}
 	c := &Catalog{limits: limits}
 	seen := map[string]bool{}
+	sharedNames := map[string]bool{}
+	scopedNames := map[string]bool{}
 	for _, e := range entries {
-		if e.Scope.Validate() != nil || e.Descriptor.Protocol.Validate() != nil || strings.TrimSpace(e.Descriptor.Name) == "" || e.Executor == nil || strings.TrimSpace(e.ConnectionID) == "" {
+		validScope := e.Scope.Validate() == nil
+		if e.SharedLocal {
+			validScope = e.Scope == (domain.Scope{}) && e.Descriptor.Protocol == domain.ToolLocal && e.Tasks == nil
+		}
+		if !validScope || e.Descriptor.Protocol.Validate() != nil || strings.TrimSpace(e.Descriptor.Name) == "" || e.Executor == nil || strings.TrimSpace(e.ConnectionID) == "" {
 			return nil, bad("tool.entry")
+		}
+		if e.SharedLocal {
+			if sharedNames[e.Descriptor.Name] || scopedNames[e.Descriptor.Name] {
+				return nil, apperrors.ErrConflict
+			}
+			sharedNames[e.Descriptor.Name] = true
+		} else {
+			if sharedNames[e.Descriptor.Name] {
+				return nil, apperrors.ErrConflict
+			}
+			scopedNames[e.Descriptor.Name] = true
 		}
 		keyData, _ := json.Marshal([]string{e.Scope.TenantID, e.Scope.UserID, e.Descriptor.Name})
 		key := string(keyData)
@@ -92,7 +111,7 @@ func (c *Catalog) List(ctx context.Context, s domain.Scope) ([]Descriptor, error
 	}
 	out := []Descriptor{}
 	for _, e := range c.entries {
-		if e.Scope == s {
+		if e.SharedLocal || e.Scope == s {
 			d := e.Descriptor
 			d.InputSchema = append([]byte(nil), d.InputSchema...)
 			out = append(out, d)
@@ -114,8 +133,8 @@ func (c *Catalog) Resolve(ctx context.Context, s domain.Scope, p domain.ToolProt
 		return nil, err
 	}
 	for i, e := range c.entries {
-		if e.Scope == s && e.Descriptor.Protocol == p && e.Descriptor.Name == name {
-			return &guarded{c: c, index: i}, nil
+		if (e.SharedLocal || e.Scope == s) && e.Descriptor.Protocol == p && e.Descriptor.Name == name {
+			return &guarded{c: c, index: i, scope: s}, nil
 		}
 	}
 	return nil, apperrors.ErrNotFound
@@ -147,6 +166,7 @@ func (c *Catalog) ResolveTask(ctx context.Context, s domain.Scope, h domain.Task
 type guarded struct {
 	c     *Catalog
 	index int
+	scope domain.Scope
 }
 
 func (g *guarded) Execute(ctx context.Context, call domain.ToolCall) (result domain.ToolOutcome, resultErr error) {
@@ -156,7 +176,7 @@ func (g *guarded) Execute(ctx context.Context, call domain.ToolCall) (result dom
 	if err := call.Validate(); err != nil {
 		return domain.ToolOutcome{}, err
 	}
-	if call.Scope != e.Scope || call.Protocol != e.Descriptor.Protocol || call.Name != e.Descriptor.Name {
+	if call.Scope != g.scope || call.Protocol != e.Descriptor.Protocol || call.Name != e.Descriptor.Name {
 		return domain.ToolOutcome{}, apperrors.ErrNotFound
 	}
 	if len(call.Arguments) > g.c.limits.MaxInputBytes {

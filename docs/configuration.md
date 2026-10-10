@@ -68,10 +68,17 @@ PolicyVersion 用于检查持久摘要与当前策略是否兼容。app.NewConte
 
 ## P8 工具配置
 
-`CAGENT_TOOLS_FILE` 默认为空，表示禁用工具；非空时指向可信 JSON 清单，由 bootstrap 在启动时读取并校验。清单定义完整 tenant/user Scope、连接/工具白名单、凭据环境引用、单次超时、输入输出字节限制和模型循环次数。config.Load 只加载路径，不执行文件/网络 I/O。详见 [工具配置与边界](tools.md) 和 [清单示例](tools.example.json)。
+工具启动时从 MongoDB `tool_connections` 加载远端地址与授权，同时全量扫描本地工具目录。`CAGENT_TOOLS_FILE` 已移除，旧清单的远端连接应写入 MongoDB，`local.config.<工具名>` 应移入该工具的 `tool.json.config`。config.Load 只解析进程参数，不执行目录/数据库 I/O。
 
+| 环境变量 | 错误字段路径 | 默认值 | 约束 |
+| --- | --- | --- | --- |
+| `CAGENT_LOCAL_TOOLS_DIR` | `tools.local_dir` | `local-tools` | 非空路径，相对进程工作目录 |
+| `CAGENT_TOOLS_TIMEOUT` | `tools.timeout` | `30s` | 正时间间隔 |
+| `CAGENT_TOOLS_MAX_INPUT_BYTES` | `tools.max_input_bytes` | `1048576` | 1 字节–4 MiB |
+| `CAGENT_TOOLS_MAX_OUTPUT_BYTES` | `tools.max_output_bytes` | `1048576` | 256 字节–8 MiB |
+| `CAGENT_TOOLS_MAX_MODEL_CALLS` | `tools.max_model_calls` | `16` | 1–128 |
 
-
+本地工具对所有有效 Scope 可见；远端工具由连接文档按完整 Scope 授权。详见 [工具配置与边界](tools.md) 和 [MongoDB 连接示例](tools.example.json)。
 
 ## P9 任务观察与恢复
 
@@ -100,7 +107,7 @@ PolicyVersion 用于检查持久摘要与当前策略是否兼容。app.NewConte
 | `CAGENT_CAPACITY_OBSERVATIONS` | 32 | 1–100000，跨 Run 的后台任务观察上限 |
 | `CAGENT_HTTP_MAX_SUBSCRIPTIONS` | 256 | 1–100000，HTTP 服务的 SSE 订阅上限 |
 
-四个容量值不接受显式空值或零。过载立即拒绝，无新增内存等待队列；具体失败、幂等重放、背压及恢复语义见 [运行保障与保留责任](operations.md)。工具输出大小继续由可信工具清单控制，不新增重复配置。运维路由不提供配置查看，不返回凭据、用户内容或错误正文。
+四个容量值不接受显式空值或零。过载立即拒绝，无新增内存等待队列；具体失败、幂等重放、背压及恢复语义见 [运行保障与保留责任](operations.md)。工具输出大小由 `CAGENT_TOOLS_MAX_OUTPUT_BYTES` 控制。运维路由不提供配置查看，不返回凭据、用户内容或错误正文。
 
 ## 模型加密与加载
 

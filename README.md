@@ -93,7 +93,7 @@ flowchart TD
 
 ### 数据与恢复边界
 
-MongoDB 保存 `sessions`、`messages`、`runs`、`events`、`tasks`、`context_snapshots`、`agent_checkpoints`、`task_deliveries`、`run_leases` 和 `mutation_receipts`。业务资源按租户和用户隔离；`models` 是管理员维护的全局模型目录，API key 使用 AES-GCM 加密，AES 密钥由服务在调用轮换接口时生成并保存到 `.env`。
+MongoDB 保存 `sessions`、`messages`、`runs`、`events`、`tasks`、`context_snapshots`、`agent_checkpoints`、`task_deliveries`、`run_leases` 和 `mutation_receipts`。业务资源按租户和用户隔离；`tool_connections` 保存管理员维护的远端工具地址和 Scope 授权；`models` 是管理员维护的全局模型目录，API key 使用 AES-GCM 加密，AES 密钥由服务在调用轮换接口时生成并保存到 `.env`。
 
 消息在会话内、事件在 Run 内分配递增序号。检查点和交付记录用于恢复原调用及防止重复接纳结果。摘要属于派生数据，原始历史保留。外部调用结果不确定且缺少安全检查点时，运行会明确失败，不盲目重放；服务不保证外部模型或工具副作用恰好一次。
 
@@ -252,13 +252,11 @@ Run 状态为 `queued`、`running`、`waiting_tool`、`completed`、`failed` 或
 
 ### 启用工具与长任务
 
-在 `.env` 中设置可信工具清单路径：
+服务启动时从 MongoDB `tool_connections` 读取 MCP/A2A 远端地址及连接配置，保留文档指定的租户/用户授权。结构见 [远端连接示例](docs/tools.example.json)，修改数据库后需重启；凭据字段保存环境变量引用。
 
-```dotenv
-CAGENT_TOOLS_FILE=./docs/tools.example.json
-```
+本地工具自动全量扫描工作目录下的 `local-tools`，无需清单或白名单；可用 `CAGENT_LOCAL_TOOLS_DIR` 指定其他目录。Windows 首次使用先运行 `./scripts/build-local-tools.ps1` 构建程序。每个 `local-tools/<工具名>/` 目录包含 `tool.json` 注册配置和 `bin` 中的可执行文件，业务配置写在该注册文件的 `config` 对象中，相对路径以工具自己的目录为基准。`read_skill` 自带读取 [示例技能](local-tools/read_skill/skills/code-review/SKILL.md) 的配置。新增工具部署目录后重启即可加载。
 
-[示例清单](docs/tools.example.json) 为 `example-tenant/example-user` 注册本地 `echo` 工具；使用其他身份时需修改清单中的 `tenant_id/user_id`。远端 MCP/A2A 连接需要配置协议、可信 URL、工具白名单及环境凭据引用。清单在启动时加载，修改后需重启。
+本地工具对所有有效身份可见，调用传入实际租户/用户；远端工具按完整 Scope 隔离。目录缺失或工具配置不完整会阻止启动；仅部署远端工具时保留空本地目录。加载方式、配置限制和进程协议见 [工具说明](docs/tools.md)。
 
 长任务交接时，从 `tool.waiting` 或 `tool.progress` 事件载荷读取本地 `task_id`，再使用 Task API 查询、取消或补充输入。授权接口请求形如 `{"text":"继续","credential_ref":"secondary"}`，引用必须由管理员预先配置。任务完成后，服务将结果交还原 Agent/Subagent 继续生成；Run 取消后迟到结果仍可保存，但不会继续生成。详见 [工具说明](docs/tools.md) 与 [长任务与恢复](docs/tasks.md)。
 

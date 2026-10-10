@@ -8,7 +8,7 @@
 2. 依据 [完整配置](configuration.md) 和 [示例](../.env.example) 注入环境变量，或填写当前工作目录的 `.env` 供服务自动加载；已有环境变量优先。示例仍需补齐实际部署配置。设置 MongoDB URI/数据库、监听地址、可写日志路径及关闭宽限期。
 3. 在 MongoDB 模型文档中配置 provider/model/base URL/API key 和请求超时；自动摘要依据 LLM 报告的输入用量触发，摘要独立随机选择模型和凭据。真实兼容性须先运行外部冒烟。见 [ADK](adk.md)。
 4. 配置 JWT 随机密钥（至少 32 字节），算法固定 HS256；可由可信身份服务签发带 tenant_id/sub/exp 的令牌，或调用 `POST /api/v1/auth/login` 生成随机身份 JWT，无须鉴权或账号密码。详见 [登录与 JWT 签发](http.md#登录与-jwt-签发)。JWT 密钥轮转需协调签发方和实例，当前无多密钥过渡机制。仅通过 TLS 入口传输令牌；服务自身没有 HTTPS 监听配置，应由部署方反向代理终止 TLS。
-5. 需要工具时设置 `CAGENT_TOOLS_FILE`；按 [工具清单](tools.example.json) 配置完整租户/用户授权、连接 ID、协议、可信 URL 与工具白名单。`credentials` 的值是环境变量名，环境变量内容为完整 Authorization 头；秘密不写入 JSON。A2A 任务恢复依赖相同 Scope、连接 ID、远端服务和原模型配置，升级时不要更改这些引用或删除旧授权。
+5. 远端 MCP/A2A 按 [连接文档示例](tools.example.json) 写入 MongoDB `tool_connections`，配置完整租户/用户授权、连接 ID、协议、可信 URL 与工具白名单。`credentials` 的值是环境变量名，环境变量内容为完整 Authorization 头。本地工具自动全量扫描 `local-tools`（可用 `CAGENT_LOCAL_TOOLS_DIR` 覆盖）；部署各工具的 `tool.json` 和可执行文件，业务配置写在 `tool.json.config` 中。仅部署远端工具时保留空本地目录。A2A 任务恢复依赖相同 Scope、连接 ID、远端服务和原模型配置，升级时不要更改这些引用或删除旧授权。
 6. 启动二进制，确认 `/healthz` 和 `/readyz` 返回 200，再使用真实 JWT 创建会话/Run 并消费 SSE。路由、DTO、幂等、错误码、暂停补充输入和授权接口见 [HTTP](http.md)。就绪仅证明数据库可达，不证明模型/工具可用。
 
 代理须关闭 SSE 响应缓冲，允许 Authorization 和 Last-Event-ID，空闲超时应大于心跳间隔；客户端持久记录已处理序号，用同一 Run ID 重连。EOF 不代表完成，须看到终止事件或查询 Run 状态。

@@ -29,7 +29,7 @@ try {
     }
     # race 不受普通测试缓存影响；显式跳过时结果必须携带这一限制。
     if (-not $SkipRace) {
-        & go test -race ./internal/observability ./internal/config ./internal/app ./internal/adapter/adk ./internal/adapter/mongodb ./internal/adapter/a2a ./internal/adapter/mcp ./internal/tool ./internal/transport/httpapi ./internal/bootstrap -count=1 -timeout=300s
+        & go test -race ./internal/observability ./internal/config ./internal/app ./internal/adapter/adk ./internal/adapter/local ./local-tools/read_skill ./pkg/localtool ./internal/adapter/mongodb ./internal/adapter/a2a ./internal/adapter/mcp ./internal/tool ./internal/transport/httpapi ./internal/bootstrap -count=1 -timeout=300s
         if ($LASTEXITCODE -ne 0) { throw 'Race checks failed.' }
     }
     & go vet ./...

@@ -13,7 +13,7 @@ import (
 // 作用域标识必须按原字节比较。拒绝已有的非 simple 默认排序规则和 view，防止
 // 大小写不敏感的集合把两个用户合并；部署账号不得在服务运行期间更改集合模式。
 func (b *Database) validateCollections(ctx context.Context) error {
-	specs, err := b.db.ListCollectionSpecifications(ctx, bson.M{"name": bson.M{"$in": []string{ModelCollection, SessionCollection, MessageCollection, RunCollection, EventCollection, TaskCollection, SnapshotCollection, CheckpointCollection, TaskDeliveryCollection, LeaseCollection, MutationReceiptCollection, ClockCollection, PayloadCollection}}})
+	specs, err := b.db.ListCollectionSpecifications(ctx, bson.M{"name": bson.M{"$in": []string{ModelCollection, ToolConnectionCollection, SessionCollection, MessageCollection, RunCollection, EventCollection, TaskCollection, SnapshotCollection, CheckpointCollection, TaskDeliveryCollection, LeaseCollection, MutationReceiptCollection, ClockCollection, PayloadCollection}}})
 	if err != nil {
 		return err
 	}
@@ -48,7 +48,7 @@ func index(name string, unique bool, fields ...string) mongo.IndexModel {
 func (b *Database) ensureIndexes(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, b.timeout)
 	defer cancel()
-	collections := []string{SessionCollection, MessageCollection, RunCollection, EventCollection, TaskCollection, SnapshotCollection, CheckpointCollection, TaskDeliveryCollection, LeaseCollection, MutationReceiptCollection, PayloadCollection}
+	collections := []string{ToolConnectionCollection, SessionCollection, MessageCollection, RunCollection, EventCollection, TaskCollection, SnapshotCollection, CheckpointCollection, TaskDeliveryCollection, LeaseCollection, MutationReceiptCollection, PayloadCollection}
 	for _, name := range collections {
 		models := []mongo.IndexModel{index("scope_id", true, "id")}
 		switch name {

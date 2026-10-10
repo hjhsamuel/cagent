@@ -42,7 +42,7 @@ func Run(parent context.Context, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	catalog, maxCalls, closeTools, err := loadTools(parent, cfg.ToolsFile)
+	catalog, maxCalls, closeTools, err := loadTools(parent, db, cfg.Tools)
 	if err != nil {
 		return err
 	}

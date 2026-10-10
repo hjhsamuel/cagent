@@ -11,9 +11,9 @@
 | `CAGENT_CAPACITY_MODELS` | 16 | 主模型和摘要模型共享；从开始调用到完整读取或提前关闭流一直占用。满载不发送模型请求、不自动重试 |
 | `CAGENT_CAPACITY_OBSERVATIONS` | 32 | 所有 Run 的后台任务观察共享；包含取消请求、订阅、查询和本次观察退避。另保留每 Run 每页 32 个任务、最多 8 个观察请求的限制 |
 | `CAGENT_HTTP_MAX_SUBSCRIPTIONS` | 256 | 每个 HTTP 服务的 SSE 连接共享，在检查游标和写流头前领取；退出且 Follow 完成后释放 |
-| 工具清单 `max_input_bytes` / `max_output_bytes` | 各 1 MiB | Catalog 统一限制本地与协议工具输入、即时结果、任务结果和进度；结果超限没有 artifact 后端时明确拒绝 |
+| `CAGENT_TOOLS_MAX_INPUT_BYTES` / `CAGENT_TOOLS_MAX_OUTPUT_BYTES` | 各 1 MiB | Catalog 统一限制本地与协议工具输入、即时结果、任务结果和进度；结果超限没有 artifact 后端时明确拒绝 |
 
-四个环境变量均为 1–100000 的整数；显式空值、零、负数和超范围值拒绝启动。工具清单输出限制为 256 字节–8 MiB；MCP/A2A HTTP 响应（含订阅流）另有 16 MiB 总读取上限和超时。本地工具必须遵守 context，不通过遗留 goroutine 伪装超时；可信本地扩展自身的分配仍由扩展作者负责。
+四个容量环境变量均为 1–100000 的整数；显式空值、零、负数和超范围值拒绝启动。工具输出限制为 256 字节–8 MiB；MCP/A2A HTTP 响应（含订阅流）另有 16 MiB 总读取上限和超时。本地工具必须遵守 context，不通过遗留 goroutine 伪装超时；可信本地扩展自身的分配仍由扩展作者负责。
 
 新运行和 SSE 满载返回 HTTP `503`、`error.code=overloaded`、`Retry-After: 1`。新运行拒绝不会写消息、Run 或会话占用。非空幂等键在满载时仍可只读找回相同输入的已提交 Run，不同输入返回冲突。该查询不会创建新 Run。事务后客户端断开不撤回已接纳工作；关闭窗口内未启动的 queued Run 由下一实例恢复。
 

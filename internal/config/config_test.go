@@ -52,6 +52,7 @@ func assertInvalid(t *testing.T, err error, field string) {
 
 func TestDefaultsAndRequiredDeploymentSettings(t *testing.T) {
 	want := config.Config{
+		Tools:       config.DefaultTools(),
 		Capacity:    config.Capacity{Runs: 64, Models: 16, Observations: 32},
 		Logging:     config.Logging{Level: "info", Path: "/app/logs/cagent.log", Size: 50, Rolls: 3},
 		HTTP:        config.HTTP{Login: config.Login{TokenTTL: time.Hour}, MaxSubscriptions: 256, Address: "127.0.0.1:8080", SSEHeartbeat: 15 * time.Second, ShutdownGrace: 30 * time.Second, WriteTimeout: 10 * time.Second, MaxBodyBytes: 1 << 20},
@@ -116,6 +117,7 @@ func TestEveryEnvironmentOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := config.Config{
+		Tools:       config.DefaultTools(),
 		Capacity:    config.Capacity{Runs: 64, Models: 16, Observations: 32},
 		Logging:     config.Logging{Level: "debug", Path: "logs/custom.log", Size: 10, Rolls: 0},
 		HTTP:        config.HTTP{Login: config.Login{TokenTTL: time.Hour}, MaxSubscriptions: 256, Address: "[::1]:9090", SSEHeartbeat: 750 * time.Millisecond, ShutdownGrace: 90 * time.Second, WriteTimeout: 10 * time.Second, MaxBodyBytes: 1 << 20},
@@ -229,6 +231,8 @@ func TestLoadReadsProcessEnvironment(t *testing.T) {
 		return "", false
 	})
 	for key, value := range map[string]string{
+		"CAGENT_LOCAL_TOOLS_DIR": "local-tools", "CAGENT_TOOLS_TIMEOUT": "30s",
+		"CAGENT_TOOLS_MAX_INPUT_BYTES": "1048576", "CAGENT_TOOLS_MAX_OUTPUT_BYTES": "1048576", "CAGENT_TOOLS_MAX_MODEL_CALLS": "16",
 		"CAGENT_HTTP_LOGIN_TOKEN_TTL": "1h",
 		"CAGENT_CAPACITY_RUNS":        "64", "CAGENT_CAPACITY_MODELS": "16", "CAGENT_CAPACITY_OBSERVATIONS": "32", "CAGENT_HTTP_MAX_SUBSCRIPTIONS": "256",
 		"CAGENT_LOG_LEVEL": "info", "CAGENT_LOG_PATH": "logs/test.log", "CAGENT_LOG_SIZE": "1", "CAGENT_LOG_ROLL": "2",

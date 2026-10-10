@@ -2,6 +2,7 @@ package schema
 
 // 集合名称与文档结构一同维护；业务集合共用 Document 信封。
 const (
+	ToolConnectionCollection  = "tool_connections"
 	ModelCollection           = "models"
 	SessionCollection         = "sessions"
 	RunCollection             = "runs"

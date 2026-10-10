@@ -26,6 +26,8 @@ func TestProductionBootstrapStartStopAndOccupiedPort(t *testing.T) {
 	address := l.Addr().String()
 	l.Close()
 	cfg := config.Defaults()
+	// 此启动夹具不部署本地工具；空目录仍经过生产扫描路径。
+	cfg.Tools.LocalDir = t.TempDir()
 	cfg.HTTP = settings()
 	cfg.HTTP.Address = address
 	cfg.MongoDB = config.MongoDB{URI: dbCfg.URI, Database: dbCfg.Database}

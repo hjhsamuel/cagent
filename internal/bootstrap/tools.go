@@ -3,62 +3,54 @@ package bootstrap
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/hjhsamuel/cagent/internal/adapter/a2a"
+	"github.com/hjhsamuel/cagent/internal/adapter/local"
 	"github.com/hjhsamuel/cagent/internal/adapter/mcp"
 	"github.com/hjhsamuel/cagent/internal/adapter/toolhttp"
 	"github.com/hjhsamuel/cagent/internal/apperrors"
+	"github.com/hjhsamuel/cagent/internal/config"
 	"github.com/hjhsamuel/cagent/internal/domain"
+	"github.com/hjhsamuel/cagent/internal/storage/schema"
 	"github.com/hjhsamuel/cagent/internal/tool"
 )
 
-// toolFile 仅从管理文件读取。凭据是环境变量引用，解析器按连接固定白名单，
-// 所以 HTTP 的 credential_ref 无法读取模型密钥或其他用户连接的环境变量。
-type toolFile struct {
-	Timeout        string `json:"timeout"`
-	MaxInputBytes  int    `json:"max_input_bytes"`
-	MaxOutputBytes int    `json:"max_output_bytes"`
-	MaxModelCalls  int    `json:"max_model_calls"`
-	Connections    []struct {
-		TenantID      string              `json:"tenant_id"`
-		UserID        string              `json:"user_id"`
-		ID            string              `json:"id"`
-		Protocol      domain.ToolProtocol `json:"protocol"`
-		URL           string              `json:"url"`
-		CardPath      string              `json:"card_path"`
-		CredentialRef string              `json:"credential_ref"`
-		Credentials   map[string]string   `json:"credentials"`
-		Tools         []string            `json:"tools"`
-	} `json:"connections"`
+type toolConnectionReader interface {
+	ListToolConnections(context.Context) ([]schema.ToolConnection, error)
 }
 
-func loadTools(ctx context.Context, path string) (*tool.Catalog, int, func(context.Context), error) {
+// loadTools 从 MongoDB 读取远端连接，独立全量扫描本地目录。
+// 本地工具对所有有效 Scope 可见；远端连接仍只授权文档指定的完整 Scope。
+func loadTools(ctx context.Context, db toolConnectionReader, cfg config.Tools) (*tool.Catalog, int, func(context.Context), error) {
 	closeAll := func(context.Context) {}
-	if path == "" {
-		return nil, 0, closeAll, nil
+	if err := cfg.Validate(); err != nil {
+		return nil, 0, closeAll, err
 	}
-	f, e := os.Open(path)
-	if e != nil {
-		return nil, 0, closeAll, tool.SafeError(e)
+	connections, err := db.ListToolConnections(ctx)
+	if err != nil {
+		return nil, 0, closeAll, err
 	}
-	defer f.Close()
-	cfg := toolFile{Timeout: "30s", MaxInputBytes: 1 << 20, MaxOutputBytes: 1 << 20, MaxModelCalls: 16}
-	dec := json.NewDecoder(io.LimitReader(f, 4<<20))
-	dec.DisallowUnknownFields()
-	if dec.Decode(&cfg) != nil {
-		return nil, 0, closeAll, apperrors.ErrInvalidArgument
+	seen := map[string]bool{}
+	for _, conn := range connections {
+		scope := domain.Scope{TenantID: conn.TenantID, UserID: conn.UserID}
+		key, _ := json.Marshal([]string{scope.TenantID, scope.UserID, conn.ID})
+		if seen[string(key)] || scope.Validate() != nil || strings.TrimSpace(conn.ID) == "" || strings.TrimSpace(conn.URL) == "" {
+			return nil, 0, closeAll, apperrors.ErrInvalidArgument
+		}
+		if conn.Protocol != string(domain.ToolMCP) && conn.Protocol != string(domain.ToolA2A) {
+			return nil, 0, closeAll, apperrors.ErrUnsupported
+		}
+		seen[string(key)] = true
 	}
-	var extra any
-	if dec.Decode(&extra) != io.EOF {
-		return nil, 0, closeAll, apperrors.ErrInvalidArgument
+	definitions, err := local.Load(ctx, local.Config{ToolsDir: cfg.LocalDir}, nil, local.Limits{Timeout: cfg.Timeout, MaxOutputBytes: cfg.MaxOutputBytes})
+	if err != nil {
+		return nil, 0, closeAll, err
 	}
-	timeout, e := time.ParseDuration(cfg.Timeout)
-	if e != nil || timeout <= 0 || cfg.MaxModelCalls < 1 || cfg.MaxModelCalls > 128 || cfg.MaxInputBytes <= 0 || cfg.MaxInputBytes > 4<<20 || cfg.MaxOutputBytes < 256 || cfg.MaxOutputBytes > 8<<20 {
-		return nil, 0, closeAll, apperrors.ErrInvalidArgument
+	var entries []tool.Entry
+	for _, d := range definitions {
+		entries = append(entries, tool.Entry{SharedLocal: true, ConnectionID: "local", Descriptor: d.Descriptor, Executor: d.Executor})
 	}
 	var closers []func(context.Context) error
 	closeAll = func(ctx context.Context) {
@@ -69,20 +61,13 @@ func loadTools(ctx context.Context, path string) (*tool.Catalog, int, func(conte
 	success := false
 	defer func() {
 		if !success {
-			cleanup, cancel := context.WithTimeout(context.Background(), timeout)
+			cleanup, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 			defer cancel()
 			closeAll(cleanup)
 		}
 	}()
-	var entries []tool.Entry
-	seen := map[string]bool{}
-	for _, conn := range cfg.Connections {
+	for _, conn := range connections {
 		scope := domain.Scope{TenantID: conn.TenantID, UserID: conn.UserID}
-		key, _ := json.Marshal([]string{scope.TenantID, scope.UserID, conn.ID})
-		if seen[string(key)] || scope.Validate() != nil || strings.TrimSpace(conn.ID) == "" {
-			return nil, 0, closeAll, apperrors.ErrInvalidArgument
-		}
-		seen[string(key)] = true
 		credentialMap := conn.Credentials
 		resolve := func(_ context.Context, s domain.Scope, ref string) (string, error) {
 			env, ok := credentialMap[ref]
@@ -95,22 +80,11 @@ func loadTools(ctx context.Context, path string) (*tool.Catalog, int, func(conte
 			}
 			return v, nil
 		}
-		remote := toolhttp.Config{Scope: scope, ID: conn.ID, URL: conn.URL, CredentialRef: conn.CredentialRef, Credentials: resolve, Timeout: timeout, MaxBytes: 16 << 20}
+		remote := toolhttp.Config{Scope: scope, ID: conn.ID, URL: conn.URL, CredentialRef: conn.CredentialRef, Credentials: resolve, Timeout: cfg.Timeout, MaxBytes: 16 << 20}
 		var descriptors []tool.Descriptor
 		var executor tool.Executor
 		var tasks tool.TaskClient
-		switch conn.Protocol {
-		case domain.ToolLocal:
-			descriptors = []tool.Descriptor{{Name: "echo", Protocol: domain.ToolLocal, Description: "返回输入文本，用于验证本地工具链路", InputSchema: []byte(`{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}`)}}
-			executor = tool.ExecutorFunc(func(_ context.Context, c domain.ToolCall) (domain.ToolOutcome, error) {
-				var args struct {
-					Text string `json:"text"`
-				}
-				if json.Unmarshal(c.Arguments, &args) != nil {
-					return domain.ToolOutcome{}, apperrors.ErrInvalidArgument
-				}
-				return domain.ToolOutcome{Result: &domain.ToolResult{CallID: c.ID, Parts: []domain.Part{{Kind: domain.PartText, Text: args.Text}}}}, nil
-			})
+		switch domain.ToolProtocol(conn.Protocol) {
 		case domain.ToolMCP:
 			client, err := mcp.New(ctx, remote)
 			if err != nil {
@@ -121,8 +95,7 @@ func loadTools(ctx context.Context, path string) (*tool.Catalog, int, func(conte
 			if err != nil {
 				return nil, 0, closeAll, err
 			}
-			executor = client
-			tasks = client
+			executor, tasks = client, client
 		case domain.ToolA2A:
 			path := conn.CardPath
 			if path == "" {
@@ -133,10 +106,7 @@ func loadTools(ctx context.Context, path string) (*tool.Catalog, int, func(conte
 				return nil, 0, closeAll, err
 			}
 			descriptors = []tool.Descriptor{client.Discover()}
-			executor = client
-			tasks = client
-		default:
-			return nil, 0, closeAll, apperrors.ErrUnsupported
+			executor, tasks = client, client
 		}
 		allowed := map[string]bool{}
 		for _, name := range conn.Tools {
@@ -149,9 +119,9 @@ func loadTools(ctx context.Context, path string) (*tool.Catalog, int, func(conte
 			entries = append(entries, tool.Entry{Scope: scope, Descriptor: d, ConnectionID: conn.ID, Executor: executor, Tasks: tasks})
 		}
 	}
-	catalog, e := tool.NewCatalog(entries, tool.Limits{Timeout: timeout, MaxInputBytes: cfg.MaxInputBytes, MaxOutputBytes: cfg.MaxOutputBytes})
-	if e != nil {
-		return nil, 0, closeAll, e
+	catalog, err := tool.NewCatalog(entries, tool.Limits{Timeout: cfg.Timeout, MaxInputBytes: cfg.MaxInputBytes, MaxOutputBytes: cfg.MaxOutputBytes})
+	if err != nil {
+		return nil, 0, closeAll, err
 	}
 	success = true
 	return catalog, cfg.MaxModelCalls, closeAll, nil

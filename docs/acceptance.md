@@ -47,7 +47,7 @@ go build ./...
 
 模型冒烟：设置 `CAGENT_TEST_MODEL=1` 及 MongoDB 模型配置，执行 `go test ./internal/adapter/adk -run TestRealOpenAISmoke -count=1 -v`。接口兼容性及摘要质量必须按目标提供方核对，见 [模型](adk.md) 与 [上下文](context.md)。
 
-工具冒烟：按 [工具说明](tools.md) 设置 `CAGENT_TEST_TOOLS=1`、`CAGENT_TEST_TOOLS_FILE` 和 `CAGENT_TEST_TOOL_CALL`，执行 `go test ./internal/bootstrap -run TestExternalToolSmoke -count=1 -v`。该测试真实执行一次指定工具，选择专用测试账户与可控操作。仅返回句柄不算长任务通过。
+工具冒烟：按 [工具说明](tools.md) 设置 `CAGENT_TEST_TOOLS=1`、`CAGENT_TEST_TOOLS_MONGODB_URI`、`CAGENT_TEST_TOOLS_MONGODB_DATABASE` 和 `CAGENT_TEST_TOOL_CALL`，执行 `go test ./internal/bootstrap -run TestExternalToolSmoke -count=1 -v`。远端连接从指定数据库的 `tool_connections` 读取。该测试真实执行一次指定工具，选择专用测试账户与可控操作。仅返回句柄不算长任务通过。
 
 外部长任务需另外通过实际 HTTP API 完成：提交会调用目标 A2A 工具的 Run；记录 SSE 中本地 task_id 和最后序号；确认等待后重启服务；观察同一远端任务被查询且启动次数不增；完成后确认原 ToolCall 结果、单一终止事件与断点重放。分别验证暂停补充输入、授权引用轮转、取消与完成竞争。MCP 当前 SDK 不支持 tasks，不能把该能力列为已交付。
 

@@ -352,7 +352,7 @@ P7 后续交接：P8 已完成下述代码与本地验收；环境就绪后补 P
 ### P8.1 工具注册与本地工具 — 已实现
 
 - `internal/tool/catalog.go`：不可变 Scope 注册快照；发现/解析/执行重验权限，JSON Schema、参数大小、超时、实际 ToolOutcome 校验，业务错误结果、artifact 引用策略、任务客户端包装。
-- `internal/bootstrap/tools.go`、`internal/config`：`CAGENT_TOOLS_FILE` 可信 JSON 配置；每连接凭据环境引用白名单、工具白名单、启动发现与关闭。内置 echo，业务工具可通过 ExecutorFunc 注册。
+- `internal/bootstrap/tools.go`、`internal/config`：远端 MCP/A2A 从 MongoDB `tool_connections` 读取；每连接凭据环境引用白名单、工具白名单、启动发现与关闭。本地工具自动全量扫描 `CAGENT_LOCAL_TOOLS_DIR`（默认 `local-tools`），读取各自 `tool.json` 注册及业务配置，调用独立可执行程序；可附带版本、创建/更新时间、作者等维护信息。echo/read_skill 示例及构建脚本随仓库提供，协议见 `docs/tools.md`。
 - `internal/adapter/adk/tools.go/runtime.go/openai.go`：工具声明及实际请求预算；有界多轮调用；兼容函数名别名；即时调用/结果回传与历史配对；任务动态暂停和 `cagent.adk.tools.v1` SDK 快照。
 - `internal/agent/runtime.go`、`internal/app/application.go/adk.go`：Update.MessageRole/Tasks、ErrWaiting；当前 Fence 下调用 P3 TrackTask 事务交接任务/检查点/事件，保留 waiting_tool 和会话占用。
 - `catalog_test.go`、`adk/tools_test.go`、`app/tools_test.go`：隔离、未知工具、Schema、无效返回、业务错误、artifact、并发、超时；真实 SDK 即时/任务行为；真实副本集 + OpenAI HTTP SDK + ADK 的消息对、双任务及检查点交接。

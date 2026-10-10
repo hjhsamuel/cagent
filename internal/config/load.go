@@ -52,7 +52,7 @@ func LoadFromEnv(lookup func(string) (string, bool), names ...string) (Config, e
 		key string
 		dst *string
 	}{
-		{"CAGENT_TOOLS_FILE", &c.ToolsFile},
+		{"CAGENT_LOCAL_TOOLS_DIR", &c.Tools.LocalDir},
 		{"CAGENT_HTTP_ADDRESS", &c.HTTP.Address},
 		{"CAGENT_HTTP_JWT_SECRET", &c.HTTP.JWT.Secret},
 		{"CAGENT_MONGODB_URI", &c.MongoDB.URI},
@@ -73,6 +73,7 @@ func LoadFromEnv(lookup func(string) (string, bool), names ...string) (Config, e
 		{"CAGENT_HTTP_WRITE_TIMEOUT", "http.write_timeout", &c.HTTP.WriteTimeout},
 		{"CAGENT_HTTP_SHUTDOWN_GRACE", "http.shutdown_grace", &c.HTTP.ShutdownGrace},
 		{"CAGENT_TASKS_POLL_INTERVAL", "tasks.poll_interval", &c.Tasks.PollInterval},
+		{"CAGENT_TOOLS_TIMEOUT", "tools.timeout", &c.Tools.Timeout},
 		{"CAGENT_TASKS_OBSERVATION_TIMEOUT", "tasks.observation_timeout", &c.Tasks.ObservationTimeout},
 		{"CAGENT_TASKS_RECONNECT_BACKOFF", "tasks.reconnect_backoff", &c.Tasks.ReconnectBackoff},
 		{"CAGENT_MAINTENANCE_CANCEL_GRACE", "maintenance.cancel_grace", &c.Maintenance.CancelGrace},
@@ -95,6 +96,9 @@ func LoadFromEnv(lookup func(string) (string, bool), names ...string) (Config, e
 		dst        *int
 	}{
 		{"CAGENT_CAPACITY_RUNS", "capacity.runs", &c.Capacity.Runs},
+		{"CAGENT_TOOLS_MAX_INPUT_BYTES", "tools.max_input_bytes", &c.Tools.MaxInputBytes},
+		{"CAGENT_TOOLS_MAX_OUTPUT_BYTES", "tools.max_output_bytes", &c.Tools.MaxOutputBytes},
+		{"CAGENT_TOOLS_MAX_MODEL_CALLS", "tools.max_model_calls", &c.Tools.MaxModelCalls},
 		{"CAGENT_MAINTENANCE_WORKERS", "maintenance.workers", &c.Maintenance.Workers},
 		{"CAGENT_CAPACITY_MODELS", "capacity.models", &c.Capacity.Models},
 		{"CAGENT_CAPACITY_OBSERVATIONS", "capacity.observations", &c.Capacity.Observations},

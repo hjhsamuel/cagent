@@ -6,7 +6,7 @@
 
 ### 已实现：P8 工具边界与协议适配
 
-`tool.Catalog` 是构造后不可变的 Scope 授权快照；List/Resolve/Execute/任务操作都重验作用域，使用 JSON Schema、上下文超时和字节限制校验边界。`CAGENT_TOOLS_FILE` 由可信管理配置提供连接/工具白名单及每连接凭据环境引用；URL 不来自模型或 HTTP 输入，禁止重定向和自动重试。超限结果默认拒绝，可显式注入按 Scope 保存的 ArtifactWriter；没有默认 artifact 存储服务。
+`tool.Catalog` 是构造后不可变的授权快照；List/Resolve/Execute/任务操作都校验有效作用域，解析出的执行器绑定到当时的 Scope，使用 JSON Schema、上下文超时和字节限制校验边界。远端连接从 MongoDB `tool_connections` 读取，保留完整 Scope 授权、工具白名单及每连接凭据环境引用；本地工具自动全量扫描 `local-tools`，对所有有效 Scope 可见，业务配置来自各自的 `tool.json.config`。URL 不来自模型或 HTTP 输入，禁止重定向和自动重试。超限结果默认拒绝，可显式注入按 Scope 保存的 ArtifactWriter；没有默认 artifact 存储服务。
 
 MCP 使用官方 modelcontextprotocol/go-sdk v1.8.0，固定 2025-11-25 Streamable HTTP，支持握手、分页发现与普通调用。SDK 没有 tasks API，MCP Get/Follow/Cancel 明确返回 Unsupported，旧任务不重执行。A2A 使用官方 a2aproject/a2a-go v0.3.15，固定 0.3.0 JSON-RPC，支持 Card、即时 Message/Task、查询/取消/订阅及暂停补充消息。订阅通知触发完整查询，保留 contextId；SDK 不暴露 SSE ID，非空旧游标明确拒绝。HTTP 安全策略位于 toolhttp，协议客户端与编解码均由 SDK 提供。详见 [工具说明](tools.md)。
 
