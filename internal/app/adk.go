@@ -41,8 +41,8 @@ func NewOpenAIService(parent context.Context, db *mongodb.Database, cfg config.C
 }
 
 // NewADKService 也允许测试/后续提供方注入真实 ADK Runtime。先检查已持久检查点，
-// 再准备新模型上下文：已提交最终消息的恢复不必重新计数已经变长的历史，也不重复生成。
-// 没有可恢复检查点的中断不调用 Execute，Recover 会明确拒绝。
+// 再准备新模型上下文：基于应用消息和工具记录的恢复不必重新计数已经变长的历史，也不重复生成。
+// 没有安全恢复记录的中断不调用 Execute，Recover 会明确拒绝。
 func NewADKService(parent context.Context, db *mongodb.Database, runtime *adk.Runtime, opts ContextOptions, lifecycle Options) (*Application, error) {
 	if runtime == nil || lifecycle.Prepare != nil || lifecycle.Recover != nil {
 		return nil, invalid("adk.service")

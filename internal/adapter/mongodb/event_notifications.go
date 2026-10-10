@@ -131,20 +131,25 @@ func (h *eventHub) watch(ctx context.Context) {
 					NS struct {
 						Collection string `bson:"coll"`
 					} `bson:"ns"`
-					Full document `bson:"fullDocument"`
+					Full bson.Raw `bson:"fullDocument"`
 				}
 				if stream.Decode(&change) == nil {
-					d := change.Full
-					id := d.ID
-					if change.NS.Collection == EventCollection {
-						id = d.RunID
-					}
-					scope := domain.Scope{TenantID: d.Tenant, UserID: d.User}
-					if validateKey(scope, id) == nil {
-						if change.NS.Collection == EventCollection {
-							h.notify(eventKey{scope, id})
-						} else {
-							h.updateHead(eventKey{scope, id}, eventHead{d.LastSequence, d.PrunedThrough, d.Status})
+					switch change.NS.Collection {
+					case EventCollection:
+						var d eventDocument
+						if bson.Unmarshal(change.Full, &d) == nil {
+							scope := domain.Scope{TenantID: d.Tenant, UserID: d.User}
+							if validateKey(scope, d.RunID) == nil {
+								h.notify(eventKey{scope, d.RunID})
+							}
+						}
+					case RunCollection:
+						var d runDocument
+						if bson.Unmarshal(change.Full, &d) == nil {
+							scope := domain.Scope{TenantID: d.Tenant, UserID: d.User}
+							if validateKey(scope, d.ID) == nil {
+								h.updateHead(eventKey{scope, d.ID}, eventHead{d.LastSequence, d.PrunedThrough, d.Status})
+							}
 						}
 					}
 				}

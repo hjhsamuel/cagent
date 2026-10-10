@@ -38,7 +38,7 @@ OpenRecovery 使用单独连接和配置，只交给内部恢复/保留流程。
 
 ## 文档、索引和事务
 
-适配层使用 schema=1 的显式 BSON 信封：tenant_id/user_id/id、查询关联字段、版本、序号/保留水位、未结算任务计数及私有 data 子文档。data 的 v1 编码采用领域字段的小写名称，不给领域结构加 BSON/JSON 标签，也不向 HTTP 暴露数据库文档。时间由服务端生成，以 BSON UTC 毫秒存储；nil 和空切片、工具字节内容保持区别。后续变更载荷格式需要 schema 迁移。
+每个集合在 `internal/storage/schema` 中具备独立的 BSON 映射结构体，适配层按集合使用对应类型进行读写和载荷转换，不再使用统一的 Document。业务集合继续使用 schema=1 的显式 BSON 信封，分别保留本集合需要的 tenant_id/user_id/id、查询关联字段、版本、序号/保留水位、未结算任务计数及私有 data 子文档。旧共用信封的无关字段读取时忽略，重新写入时移除；既有载荷无需迁移。data 的 v1 编码采用领域字段的小写名称，不给领域结构加 BSON/JSON 标签，也不向 HTTP 暴露数据库文档。时间由服务端生成，以 BSON UTC 毫秒存储；nil 和空切片、工具字节内容保持区别。后续变更载荷格式需要 schema 迁移。
 
 所有资源的唯一/查询索引均含 tenant_id、user_id。使用 simple 二进制比较；Open/OpenRecovery 拒绝已有的非 simple 默认排序规则和 view，避免不区分大小写的匹配合并不同用户。
 

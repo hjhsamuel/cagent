@@ -40,11 +40,11 @@ func (b *Database) AcquireLease(ctx context.Context, scope domain.Scope, runID, 
 	var result store.Lease
 	commitErr := b.withTransaction(ctx, "acquire", func(tx context.Context) error {
 		result = store.Lease{} // 每次重试独立构造结果，失败尝试不向调用方泄漏。
-		var doc document
+		var doc runDocument
 		var run domain.Run
 		err := b.collection(RunCollection).FindOne(tx, key(scope, runID)).Decode(&doc)
 		if err == nil {
-			err = b.decode(tx, doc, &run)
+			err = doc.decode(&run)
 		}
 		if err != nil {
 			return err
@@ -136,17 +136,17 @@ func (b *Database) ReleaseLease(ctx context.Context, l store.Lease) error {
 
 // guard 实际递增租约 Revision，使接管、续期、取消与业务写入在同一行产生写冲突。
 // 不能把这次写入换成只读校验或无变化更新，否则快照隔离下旧持有者仍可能提交。
-func (b *Database) guard(ctx context.Context, g store.WriteGuard) (domain.Run, document, time.Time, error) {
+func (b *Database) guard(ctx context.Context, g store.WriteGuard) (domain.Run, runDocument, time.Time, error) {
 	var zero domain.Run
-	var empty document
+	var empty runDocument
 	if err := g.Validate(); err != nil {
 		return zero, empty, time.Time{}, err
 	}
-	var doc document
+	var doc runDocument
 	var run domain.Run
 	err := b.collection(RunCollection).FindOne(ctx, key(g.Lease.Scope, g.Lease.RunID)).Decode(&doc)
 	if err == nil {
-		err = b.decode(ctx, doc, &run)
+		err = doc.decode(&run)
 	}
 	if err != nil {
 		return run, doc, time.Time{}, err

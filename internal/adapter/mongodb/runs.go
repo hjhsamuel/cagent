@@ -27,7 +27,7 @@ func (b *Database) ReplayRun(ctx context.Context, scope domain.Scope, sessionID,
 	filter := scoped(scope)
 	filter["session_id"] = sessionID
 	filter["idempotency_key"] = idempotencyKey
-	var d document
+	var d runDocument
 	if err := b.collection(RunCollection).FindOne(ctx, filter).Decode(&d); err != nil {
 		return domain.Run{}, safeError(err)
 	}
@@ -40,7 +40,7 @@ func (b *Database) ReplayRun(ctx context.Context, scope domain.Scope, sessionID,
 		return domain.Run{}, err
 	}
 	var run domain.Run
-	err := b.decode(ctx, d, &run)
+	err := d.decode(&run)
 	return run, safeError(err)
 }
 
@@ -59,11 +59,11 @@ func (b *Database) StartRun(ctx context.Context, req store.StartRunRequest) (sto
 			f := scoped(req.Run.Scope)
 			f["session_id"] = req.Run.SessionID
 			f["idempotency_key"] = req.Run.IdempotencyKey
-			var d document
+			var d runDocument
 			var storedRun domain.Run
 			err := b.collection(RunCollection).FindOne(tx, f).Decode(&d)
 			if err == nil {
-				err = b.decode(tx, d, &storedRun)
+				err = d.decode(&storedRun)
 			}
 			if err == nil {
 				var saved [32]byte
@@ -86,11 +86,11 @@ func (b *Database) StartRun(ctx context.Context, req store.StartRunRequest) (sto
 				return err
 			}
 		}
-		var old document
+		var old sessionDocument
 		var s domain.Session
 		err := b.collection(SessionCollection).FindOne(tx, key(req.Run.Scope, req.Run.SessionID)).Decode(&old)
 		if err == nil {
-			err = b.decode(tx, old, &s)
+			err = old.decode(&s)
 		}
 		if err != nil {
 			return err
@@ -121,7 +121,7 @@ func (b *Database) StartRun(ctx context.Context, req store.StartRunRequest) (sto
 		}
 		s.ActiveRunID = run.ID
 		s.UpdatedAt = now
-		updated, err := repack(old, s, s.Version)
+		updated, err := repackSession(old, s, s.Version)
 		if err != nil {
 			return err
 		}
@@ -135,7 +135,7 @@ func (b *Database) StartRun(ctx context.Context, req store.StartRunRequest) (sto
 			return err
 		}
 		out = store.StartRunResult{Run: run, Input: input, SessionVersion: s.Version}
-		d, err := pack(run.Scope, run.ID, run, 1)
+		d, err := packRun(run.Scope, run.ID, run, 1)
 		if err != nil {
 			return err
 		}
@@ -153,7 +153,7 @@ func (b *Database) StartRun(ctx context.Context, req store.StartRunRequest) (sto
 		if err != nil {
 			return err
 		}
-		m, err := pack(input.Scope, input.ID, input, 1)
+		m, err := packMessage(input.Scope, input.ID, input, 1)
 		if err != nil {
 			return err
 		}
@@ -283,21 +283,21 @@ func (b *Database) CancelRun(ctx context.Context, req store.CancelRunRequest) (s
 	commitErr := b.withTransaction(ctx, "cancel", func(tx context.Context) error {
 		result = store.CommitResult{} // 每次重试独立构造结果，失败尝试不向调用方泄漏。
 		var out store.CommitResult
-		var old document
+		var old runDocument
 		var run domain.Run
 		err := b.collection(RunCollection).FindOne(tx, key(req.Scope, req.RunID)).Decode(&old)
 		if err == nil {
-			err = b.decode(tx, old, &run)
+			err = old.decode(&run)
 		}
 		if err != nil {
 			return err
 		}
 		out.Run = run
-		var sDoc document
+		var sDoc sessionDocument
 		var s domain.Session
 		err = b.collection(SessionCollection).FindOne(tx, key(run.Scope, run.SessionID)).Decode(&sDoc)
 		if err == nil {
-			err = b.decode(tx, sDoc, &s)
+			err = sDoc.decode(&s)
 		}
 		if err != nil {
 			return err

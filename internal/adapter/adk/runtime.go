@@ -65,7 +65,7 @@ func (r *Runtime) Execute(ctx context.Context, req agent.Request, emit agent.Emi
 	return r.run(ctx, req, emit)
 }
 
-// run 在首次输入或所有依赖已接纳的检查点边界推进 SDK，恢复不调用旧工具。
+// run 从应用消息重建模型上下文，每次使用全新 Runner，恢复不调用旧工具。
 func (r *Runtime) run(ctx context.Context, req agent.Request, emit agent.Emit) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -92,46 +92,63 @@ func (r *Runtime) run(ctx context.Context, req agent.Request, emit agent.Emit) e
 		if len(req.Checkpoint.PendingCallIDs) > 0 {
 			return agent.ErrWaiting
 		}
+		// 部分交接时 PendingCallIDs 尚未补齐，以整批执行记录为准。
+		for _, p := range v.Tools {
+			if !hasResult(v.Messages, req.Run.ID, p.Call.ID) {
+				return agent.ErrWaiting
+			}
+		}
 		req.Messages = v.Messages
 	}
+	// 后续追加交互不复用调用方切片的剩余容量，避免并发请求共享底层数组。
+	req.Messages = append([]domain.Message{}, req.Messages...)
 	for _, m := range req.Messages {
 		if m.Scope != req.Run.Scope || m.SessionID != req.Run.SessionID {
 			return invalid("runtime.messages")
 		}
 	}
-	mapped, e := mapMessages(req.Messages, r.model.Name())
+	mapped, e := mapMessagesForRun(req.Messages, r.model.Name(), req.Run.ID)
 	if e != nil {
 		return e
 	}
 	// 初次执行必须以本 Run 的 user 输入结束；工具结果续接不能走首次 Execute。
 	last := req.Messages[len(req.Messages)-1]
-	if last.Role != domain.RoleUser || last.RunID != req.Run.ID {
+	if saved == nil && (last.Role != domain.RoleUser || last.RunID != req.Run.ID) {
 		return invalid("runtime.current_input")
 	}
 	svc := session.InMemoryService()
-	created, e := svc.Create(ctx, &session.CreateRequest{AppName: "cagent", UserID: req.Run.Scope.UserID, SessionID: req.Run.ID})
+	_, e = svc.Create(ctx, &session.CreateRequest{AppName: "cagent", UserID: req.Run.Scope.UserID, SessionID: req.Run.ID})
 	if e != nil {
 		return safeError(e)
 	}
 	calls := 0
 	if saved != nil {
-		restored, _, err := restoreSDK(ctx, saved.SDK, "cagent", req.Run.Scope.UserID, req.Run.ID)
-		if err != nil {
-			return err
-		}
-		svc = restored
-		mapped.Contents = saved.Contents
 		calls = saved.ModelCalls
 	}
 	state := &toolRun{seen: map[string]bool{}}
 	if saved != nil {
-		for _, c := range saved.Contents {
-			for _, p := range c.Parts {
-				if p.FunctionCall != nil {
-					state.seen[p.FunctionCall.ID] = true
+		for _, m := range saved.Messages {
+			for _, p := range m.Parts {
+				if m.RunID == req.Run.ID && p.Kind == domain.PartToolCall {
+					state.seen[p.ToolCallID] = true
 				}
 			}
 		}
+	}
+	// 只有持久化成功的完整交互才进入恢复历史，不记录流式增量或 deferred 占位。
+	forward := emit
+	emit = func(c context.Context, u agent.Update) error {
+		if err := forward(c, u); err != nil {
+			return err
+		}
+		if u.Message != nil {
+			role := u.MessageRole
+			if role == "" {
+				role = domain.RoleAssistant
+			}
+			req.Messages = append(req.Messages, interaction(req, role, u.Message))
+		}
+		return nil
 	}
 	registered, e := r.tools(ctx, req, state)
 	if e != nil {
@@ -161,6 +178,10 @@ func (r *Runtime) run(ctx context.Context, req agent.Request, emit agent.Emit) e
 			// 用 JSON 深拷贝让 SDK/模型无法修改原映射，各次调用保持输入隔离。
 			// 保留 SDK 打包的可执行工具和声明；初始上下文与本轮工具历史由本适配器维护。
 			declarations := out.Config.Tools
+			mapped, err := mapMessagesForRun(req.Messages, r.model.Name(), req.Run.ID)
+			if err != nil {
+				return nil, err
+			}
 			data, err := json.Marshal(mapped)
 			if err != nil {
 				return nil, safeError(err)
@@ -187,7 +208,9 @@ func (r *Runtime) run(ctx context.Context, req agent.Request, emit agent.Emit) e
 	var final *session.Event
 	input := mapped.Contents[len(mapped.Contents)-1]
 	if saved != nil {
-		input = nil
+		// 仅启动全新 SDK 工作流；真正的输入由 BeforeModel 从应用历史注入。
+		// 不把旧 FunctionCall/Response 交给 SDK 的工作流恢复逻辑。
+		input = genai.NewContentFromText("continue", "user")
 	}
 	for ev, err := range runner.Run(ctx, req.Run.Scope.UserID, req.Run.ID, input, sdkagent.RunConfig{StreamingMode: sdkagent.StreamingModeSSE}) {
 		if err != nil {
@@ -209,26 +232,11 @@ func (r *Runtime) run(ctx context.Context, req agent.Request, emit agent.Emit) e
 			continue
 		}
 		if !ev.Partial && r.toolOptions.Registry != nil {
-			// 新 Runner 可能重放最后一个已接纳的 FunctionResponse。该响应已经
-			// 位于持久历史及 mapped 中，不能再次发布消息或追加到模型请求。
-			if saved != nil {
-				filtered := &genai.Content{Role: ev.Content.Role}
-				for _, p := range ev.Content.Parts {
-					if p.FunctionResponse == nil || saved.Results[p.FunctionResponse.ID] == nil {
-						filtered.Parts = append(filtered.Parts, p)
-					}
-				}
-				if len(filtered.Parts) == 0 {
-					continue
-				}
-				ev.Content = filtered
-			}
 			isTool, err := toolEvent(ctx, emit, ev.Content, state, outputData(req, ev, "").PromptTokens)
 			if err != nil {
 				return err
 			}
 			if isTool {
-				mapped.Contents = append(mapped.Contents, ev.Content)
 				continue
 			}
 		}
@@ -265,14 +273,6 @@ func (r *Runtime) run(ctx context.Context, req agent.Request, emit agent.Emit) e
 		return err
 	}
 	if len(state.pending) > 0 {
-		loaded, e := svc.Get(ctx, &session.GetRequest{AppName: "cagent", UserID: req.Run.Scope.UserID, SessionID: req.Run.ID})
-		if e != nil {
-			return safeError(e)
-		}
-		snap, e := snapshotSDK(loaded.Session)
-		if e != nil {
-			return e
-		}
 		failure := ""
 		if state.failure != nil {
 			failure = "tool_execution_failed"
@@ -280,7 +280,7 @@ func (r *Runtime) run(ctx context.Context, req agent.Request, emit agent.Emit) e
 				failure = "execution_outcome_uncertain"
 			}
 		}
-		data, e := json.Marshal(pendingCheckpoint{Contents: mapped.Contents, ModelCalls: calls, Model: r.model.Name(), Messages: req.Messages, Scope: req.Run.Scope, RunID: req.Run.ID, Caller: req.Caller, SDK: snap, Tools: state.pending, Failure: failure})
+		data, e := json.Marshal(pendingCheckpoint{ModelCalls: calls, Model: r.model.Name(), Messages: req.Messages, Scope: req.Run.Scope, RunID: req.Run.ID, Caller: req.Caller, Tools: state.pending, Failure: failure})
 		if e != nil {
 			return safeError(e)
 		}
@@ -316,23 +316,15 @@ func (r *Runtime) run(ctx context.Context, req agent.Request, emit agent.Emit) e
 	if final == nil {
 		return safeError(ErrModel)
 	}
-	loaded, e := svc.Get(ctx, &session.GetRequest{AppName: "cagent", UserID: req.Run.Scope.UserID, SessionID: created.Session.ID()})
-	if e != nil {
-		return safeError(e)
-	}
-	snap, e := snapshotSDK(loaded.Session)
-	if e != nil {
-		return e
-	}
-	cpData, e := json.Marshal(completedCheckpoint{Model: r.model.Name(), Scope: req.Run.Scope, RunID: req.Run.ID, Caller: req.Caller, SDK: snap, FinalEventID: final.ID})
-	if e != nil {
-		return safeError(e)
-	}
 	parts := make([]domain.Part, 0, len(final.Content.Parts))
 	var full strings.Builder
 	for _, p := range final.Content.Parts {
 		parts = append(parts, domain.Part{Kind: domain.PartText, Text: p.Text})
 		full.WriteString(p.Text)
+	}
+	cpData, e := json.Marshal(completedCheckpoint{Model: r.model.Name(), Scope: req.Run.Scope, RunID: req.Run.ID, Caller: req.Caller, Final: parts})
+	if e != nil {
+		return safeError(e)
 	}
 	data, _ := json.Marshal(outputData(req, final, full.String()))
 	cp := &domain.Checkpoint{Scope: req.Run.Scope, RunID: req.Run.ID, Caller: req.Caller, Format: CheckpointFormat, Data: cpData}

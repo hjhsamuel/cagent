@@ -25,7 +25,7 @@ func (b *Database) writePayload(ctx context.Context, scope domain.Scope, raw []b
 	for i := 0; i < ref.Chunks; i++ {
 		end := min((i+1)*payloadChunkSize, len(raw))
 		id := compositeID(ref.Hash, stringInt(int64(i)))
-		d := bson.M{"tenant_id": scope.TenantID, "user_id": scope.UserID, "id": id, "hash": ref.Hash, "index": i, "data": raw[i*payloadChunkSize : end]}
+		d := schema.PayloadChunk{Tenant: scope.TenantID, User: scope.UserID, ID: id, Hash: ref.Hash, Index: i, Data: raw[i*payloadChunkSize : end]}
 		if _, err := b.collection(PayloadCollection).UpdateOne(ctx, key(scope, id), bson.M{"$setOnInsert": d}, options.UpdateOne().SetUpsert(true)); err != nil {
 			return nil, err
 		}
@@ -38,11 +38,7 @@ func (b *Database) readPayload(ctx context.Context, scope domain.Scope, ref *sch
 	}
 	raw := make([]byte, 0, ref.Bytes)
 	for i := 0; i < ref.Chunks; i++ {
-		var chunk struct {
-			Hash  string `bson:"hash"`
-			Index int    `bson:"index"`
-			Data  []byte `bson:"data"`
-		}
+		var chunk schema.PayloadChunk
 		if err := b.collection(PayloadCollection).FindOne(ctx, key(scope, compositeID(ref.Hash, stringInt(int64(i))))).Decode(&chunk); err != nil {
 			return nil, err
 		}
@@ -57,7 +53,7 @@ func (b *Database) readPayload(ctx context.Context, scope domain.Scope, ref *sch
 	}
 	return raw, nil
 }
-func (b *Database) decode(ctx context.Context, d document, value any) error {
+func (b *Database) decodeCheckpoint(ctx context.Context, d checkpointDocument, value *domain.Checkpoint) error {
 	if d.Payload != nil {
 		if d.Schema != schema.DocumentVersion || len(d.Data) > 0 {
 			return invariant()
@@ -70,8 +66,8 @@ func (b *Database) decode(ctx context.Context, d document, value any) error {
 	}
 	return d.decode(value)
 }
-func (b *Database) packCheckpoint(ctx context.Context, scope domain.Scope, id string, cp domain.Checkpoint, version int64) (document, error) {
-	d, err := pack(scope, id, cp, version)
+func (b *Database) packCheckpoint(ctx context.Context, scope domain.Scope, id string, cp domain.Checkpoint, version int64) (checkpointDocument, error) {
+	d, err := packCheckpointRecord(scope, id, cp, version)
 	if err != nil {
 		return d, err
 	}

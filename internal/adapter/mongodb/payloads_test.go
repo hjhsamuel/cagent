@@ -22,7 +22,7 @@ func TestLargeReceiptAndCheckpointSurviveOverwriteAndRetry(t *testing.T) {
 	req := store.CommitRunRequest{Guard: g, OperationID: "large", Status: domain.RunRunning, ExpectedSessionVersion: 2, Checkpoint: &cp, Messages: []domain.Message{{Scope: testScope, ID: "large-message", SessionID: "session", RunID: "run", Role: domain.RoleAssistant, Parts: []domain.Part{{Kind: domain.PartText, Text: large}}}}, Events: []domain.Event{{Scope: testScope, RunID: "run", Kind: domain.EventTextDelta, Data: []byte(large)}}}
 	out, err := db.CommitRun(ctx, req)
 	check(t, err)
-	var receipt document
+	var receipt receiptDocument
 	check(t, db.collection(MutationReceiptCollection).FindOne(ctx, key(testScope, compositeID("run", "large"))).Decode(&receipt))
 	raw, err := bson.Marshal(receipt)
 	check(t, err)
@@ -34,7 +34,7 @@ func TestLargeReceiptAndCheckpointSurviveOverwriteAndRetry(t *testing.T) {
 	if string(saved.Data) != large {
 		t.Fatal("chunked checkpoint changed")
 	}
-	var checkpoint document
+	var checkpoint checkpointDocument
 	check(t, db.collection(CheckpointCollection).FindOne(ctx, key(testScope, compositeID("run", "run"))).Decode(&checkpoint))
 	if checkpoint.Payload == nil {
 		t.Fatal("checkpoint was not offloaded")

@@ -41,10 +41,13 @@ func TestRealRunnerImmediateAndDynamicTask(t *testing.T) {
 						t.Error("missing declarations")
 					}
 					if n == 1 {
-						yield(&model.LLMResponse{Content: &genai.Content{Role: "model", Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "original", Name: "echo", Args: map[string]any{}}}}}, UsageMetadata: &genai.GenerateContentResponseUsageMetadata{PromptTokenCount: 8192}}, nil)
+						yield(&model.LLMResponse{Content: &genai.Content{Role: "model", Parts: []*genai.Part{{Text: "using echo"}, {FunctionCall: &genai.FunctionCall{ID: "original", Name: "echo", Args: map[string]any{}}}}}, UsageMetadata: &genai.GenerateContentResponseUsageMetadata{PromptTokenCount: 8192}}, nil)
 					} else {
 						if len(r.Contents) != 4 || r.Contents[3].Parts[0].FunctionResponse == nil {
 							t.Error("lost tool history")
+						}
+						if r.Contents[2].Parts[0].Text != "using echo" {
+							t.Error("lost text accompanying tool call")
 						}
 						yield(finalResponse("done", 1, 1), nil)
 					}
@@ -68,7 +71,7 @@ func TestRealRunnerImmediateAndDynamicTask(t *testing.T) {
 					t.Fatal("missing handoff", u)
 				}
 				var cp pendingCheckpoint
-				if json.Unmarshal(u.Checkpoint.Data, &cp) != nil || cp.Tools[0].Handle.RemoteID != "remote" || cp.Model != m.Name() || len(cp.Messages) != len(req.Messages) {
+				if json.Unmarshal(u.Checkpoint.Data, &cp) != nil || cp.Tools[0].Handle.RemoteID != "remote" || cp.Model != m.Name() || len(cp.Messages) != len(req.Messages)+1 {
 					t.Fatal("lost remote task")
 				}
 				for _, u := range updates {

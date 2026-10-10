@@ -406,7 +406,7 @@ func (a *Application) execute(parent context.Context, scope domain.Scope, id str
 			err = agent.ErrUncertain
 		} else if len(cp.PendingCallIDs) == 0 && !a.checkpointComplete(cp) && a.opts.Registry != nil {
 			// 接纳后的检查点不能无限重放：推进后可能已执行新工具，而新句柄
-			// 尚未落库。先标记不确定窗口，再进入 SDK；新的安全输出覆盖屏障。
+			// 尚未落库。先标记不确定窗口，再推进模型；新的安全输出覆盖屏障。
 			cp.Format = agent.InFlightCheckpointFormat
 			if e := commit(domain.RunRunning, nil, nil, &cp); e != nil {
 				return e
@@ -499,7 +499,7 @@ func (a *Application) execute(parent context.Context, scope domain.Scope, id str
 				}
 				cp := *update.Checkpoint
 				cp.PendingCallIDs = nil
-				// 每个 TrackTask 都将句柄和含全部 SDK 状态的检查点原子保存。
+				// 每个 TrackTask 都将句柄和含整批工具记录及 LLM 消息的检查点原子保存。
 				// PendingCallIDs 按登记顺序增加，遵守存储禁止凭空新增待完成调用的约束。
 				tracker := &taskTracker{app: a, run: &run, lease: &lease, checkpoint: &cp}
 				for _, task := range update.Tasks {

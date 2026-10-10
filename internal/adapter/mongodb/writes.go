@@ -85,11 +85,11 @@ func (b *Database) receipt(ctx context.Context, scope domain.Scope, runID, op st
 	if err := validateKey(scope, op); err != nil {
 		return store.CommitResult{}, false, err
 	}
-	var rDoc document
+	var rDoc receiptDocument
 	var r persistedReceipt
 	err := b.collection(MutationReceiptCollection).FindOne(ctx, key(scope, compositeID(runID, op))).Decode(&rDoc)
 	if err == nil {
-		err = b.decode(ctx, rDoc, &r)
+		err = rDoc.decode(&r)
 	}
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return store.CommitResult{}, false, nil
@@ -115,10 +115,14 @@ func (b *Database) receipt(ctx context.Context, scope domain.Scope, runID, op st
 	return r.Result, true, nil
 }
 
+// persistedReceipt 是提交回执的持久化载荷，可内联结果或引用不可变分块。
 type persistedReceipt struct {
+	// MutationReceipt 内联保存作用域、运行与操作标识、操作种类、请求摘要和原提交结果。
 	store.MutationReceipt `bson:",inline"`
-	Format                int                `bson:"receipt_format,omitempty"`
-	ResultRef             *schema.PayloadRef `bson:"result_ref,omitempty"`
+	// Format 是结果存储格式：0 为旧内联格式，1 为当前内联格式，2 为分块引用格式。
+	Format int `bson:"receipt_format,omitempty"`
+	// ResultRef 是大提交结果的不可变分块引用；Format 为 2 时必填，用于重放原结果。
+	ResultRef *schema.PayloadRef `bson:"result_ref,omitempty"`
 }
 
 func (b *Database) saveReceipt(ctx context.Context, scope domain.Scope, runID, op string, kind store.MutationKind, digest [32]byte, result store.CommitResult) error {
@@ -136,7 +140,7 @@ func (b *Database) saveReceipt(ctx context.Context, scope domain.Scope, runID, o
 			return err
 		}
 	}
-	d, err := pack(scope, compositeID(runID, op), r, 1)
+	d, err := packReceipt(scope, compositeID(runID, op), r, 1)
 	if err != nil {
 		return err
 	}
@@ -146,7 +150,7 @@ func (b *Database) saveReceipt(ctx context.Context, scope domain.Scope, runID, o
 	return err
 }
 
-func (b *Database) saveRun(ctx context.Context, run *domain.Run, old document, updated document, now time.Time) error {
+func (b *Database) saveRun(ctx context.Context, run *domain.Run, old runDocument, updated runDocument, now time.Time) error {
 	v, err := increment(run.Version)
 	if err != nil {
 		return err
@@ -156,7 +160,7 @@ func (b *Database) saveRun(ctx context.Context, run *domain.Run, old document, u
 	if run.Status.IsTerminal() && run.TerminatedAt.IsZero() {
 		run.TerminatedAt = now
 	}
-	updated, err = repack(updated, *run, v)
+	updated, err = repackRun(updated, *run, v)
 	if err != nil {
 		return err
 	}
@@ -173,7 +177,7 @@ func (b *Database) saveRun(ctx context.Context, run *domain.Run, old document, u
 }
 
 // appendEvents 仅向当前事务写入，绝不发布。终态标记仅由运行状态事务产生。
-func (b *Database) appendEvents(ctx context.Context, run domain.Run, doc *document, events []domain.Event, now time.Time, allowTerminal bool) ([]domain.Event, error) {
+func (b *Database) appendEvents(ctx context.Context, run domain.Run, doc *runDocument, events []domain.Event, now time.Time, allowTerminal bool) ([]domain.Event, error) {
 	out := slices.Clone(events)
 	for i := range out {
 		e := &out[i]
@@ -196,7 +200,7 @@ func (b *Database) appendEvents(ctx context.Context, run domain.Run, doc *docume
 		doc.LastSequence = seq
 		e.Sequence = seq
 		e.CreatedAt = now
-		d, err := pack(run.Scope, compositeID(run.ID, stringInt(seq)), *e, 1)
+		d, err := packEvent(run.Scope, compositeID(run.ID, stringInt(seq)), *e, 1)
 		if err != nil {
 			return nil, err
 		}
@@ -212,11 +216,11 @@ func (b *Database) appendEvents(ctx context.Context, run domain.Run, doc *docume
 
 // output 原子更新会话消息计数及占用；调用前必须校验父 Run 和租约。
 func (b *Database) output(ctx context.Context, run domain.Run, expected int64, messages []domain.Message, release bool, now time.Time) ([]domain.Message, int64, error) {
-	var old document
+	var old sessionDocument
 	var s domain.Session
 	err := b.collection(SessionCollection).FindOne(ctx, key(run.Scope, run.SessionID)).Decode(&old)
 	if err == nil {
-		err = b.decode(ctx, old, &s)
+		err = old.decode(&s)
 	}
 	if err != nil {
 		return nil, 0, err
@@ -244,7 +248,7 @@ func (b *Database) output(ctx context.Context, run domain.Run, expected int64, m
 		updated.LastSequence = seq
 		m.Sequence = seq
 		m.CreatedAt = now
-		d, e := pack(run.Scope, m.ID, *m, 1)
+		d, e := packMessage(run.Scope, m.ID, *m, 1)
 		if e != nil {
 			return nil, 0, e
 		}
@@ -265,7 +269,7 @@ func (b *Database) output(ctx context.Context, run domain.Run, expected int64, m
 			return nil, 0, err
 		}
 		s.UpdatedAt = now
-		updated, err = repack(updated, s, s.Version)
+		updated, err = repackSession(updated, s, s.Version)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -288,11 +292,11 @@ func (b *Database) checkpoint(ctx context.Context, run domain.Run, next domain.C
 		return next, false, err
 	}
 	id := compositeID(run.ID, next.Caller.InvocationID)
-	var old document
+	var old checkpointDocument
 	var current domain.Checkpoint
 	err := b.collection(CheckpointCollection).FindOne(ctx, key(run.Scope, id)).Decode(&old)
 	if err == nil {
-		err = b.decode(ctx, old, &current)
+		err = b.decodeCheckpoint(ctx, old, &current)
 	}
 	exists := err == nil
 	if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {

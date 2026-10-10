@@ -19,7 +19,7 @@ import (
 	"github.com/hjhsamuel/cagent/internal/tool"
 )
 
-// 只在首次 Track 事务之后中断，留下真实 SDK 的整批句柄快照和一个已登记 Task。
+// 只在首次 Track 事务之后中断，留下应用的整批工具记录和一个已登记 Task。
 // 不直接篡改数据库来制造状态，验证生产崩溃窗口能由后续正常事务补齐。
 type partialHandoff struct {
 	*adk.Runtime

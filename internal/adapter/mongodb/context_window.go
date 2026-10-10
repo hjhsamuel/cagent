@@ -30,12 +30,12 @@ func (b *Database) ContextWindow(ctx context.Context, snapshot domain.ContextSna
 	var end int64
 	err := b.withTransaction(ctx, "context.window", func(tx context.Context) error {
 		history = nil
-		var sd document
+		var sd sessionDocument
 		var session domain.Session
 		if err := b.collection(SessionCollection).FindOne(tx, key(snapshot.Scope, snapshot.SessionID)).Decode(&sd); err != nil {
 			return err
 		}
-		if err := b.decode(tx, sd, &session); err != nil {
+		if err := sd.decode(&session); err != nil {
 			return err
 		}
 		if session.Version != sessionVersion {
@@ -44,12 +44,12 @@ func (b *Database) ContextWindow(ctx context.Context, snapshot domain.ContextSna
 		if err := snapshot.ValidateForSession(session); err != nil {
 			return err
 		}
-		var stored document
+		var stored snapshotDocument
 		var cp domain.ContextSnapshot
 		if err := b.collection(SnapshotCollection).FindOne(tx, key(snapshot.Scope, compositeID(session.ID, stringInt(snapshot.Version)))).Decode(&stored); err != nil {
 			return err
 		}
-		if err := b.decode(tx, stored, &cp); err != nil {
+		if err := stored.decode(&cp); err != nil {
 			return err
 		}
 		if cp != snapshot || cp.ThroughSequence > sd.LastSequence {
@@ -69,12 +69,12 @@ func (b *Database) ContextWindow(ctx context.Context, snapshot domain.ContextSna
 		}
 		defer cursor.Close(tx)
 		for cursor.Next(tx) {
-			var d document
+			var d messageDocument
 			var m domain.Message
 			if err := cursor.Decode(&d); err != nil {
 				return err
 			}
-			if err := b.decode(tx, d, &m); err != nil {
+			if err := d.decode(&m); err != nil {
 				return err
 			}
 			history = append(history, m)

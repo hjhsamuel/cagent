@@ -11,8 +11,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
-func taskDocument(t domain.Task) (document, error) {
-	d, err := pack(t.Scope, t.ID, t, t.Version)
+func taskDocument(t domain.Task) (taskRecord, error) {
+	d, err := packTask(t.Scope, t.ID, t, t.Version)
 	d.RunID = t.Call.RunID
 	d.SessionID = t.Call.SessionID
 	d.InvocationID = t.Call.Caller.InvocationID
@@ -26,7 +26,7 @@ func taskDocument(t domain.Task) (document, error) {
 }
 func (b *Database) createDelivery(ctx context.Context, t domain.Task, now time.Time) error {
 	v := domain.TaskDelivery{Scope: t.Scope, TaskID: t.ID, RunID: t.Call.RunID, Caller: t.Call.Caller, ToolCallID: t.Call.ID, State: domain.DeliveryPending, Version: 1, CreatedAt: now}
-	d, err := pack(t.Scope, t.ID, v, 1)
+	d, err := packDelivery(t.Scope, t.ID, v, 1)
 	if err != nil {
 		return err
 	}
@@ -56,30 +56,30 @@ func (b *Database) TrackTask(ctx context.Context, req store.TrackTaskRequest) (s
 		f["run_id"] = req.Task.Call.RunID
 		f["invocation_id"] = req.Task.Call.Caller.InvocationID
 		f["call_id"] = req.Task.Call.ID
-		var previousDoc document
+		var previousDoc taskRecord
 		var previous domain.Task
 		err := b.collection(TaskCollection).FindOne(tx, f).Decode(&previousDoc)
 		if err == nil {
-			err = b.decode(tx, previousDoc, &previous)
+			err = previousDoc.decode(&previous)
 		}
 		if err == nil {
 			if !reflect.DeepEqual(previous.Call, req.Task.Call) || previous.Handle != req.Task.Handle {
 				return conflict("task.call")
 			}
-			var runDoc document
+			var runDoc runDocument
 			var run domain.Run
 			e := b.collection(RunCollection).FindOne(tx, key(previous.Scope, previous.Call.RunID)).Decode(&runDoc)
 			if e == nil {
-				e = b.decode(tx, runDoc, &run)
+				e = runDoc.decode(&run)
 			}
 			if e != nil {
 				return e
 			}
-			var cpDoc document
+			var cpDoc checkpointDocument
 			var cp domain.Checkpoint
 			e = b.collection(CheckpointCollection).FindOne(tx, key(previous.Scope, compositeID(previous.Call.RunID, previous.Call.Caller.InvocationID))).Decode(&cpDoc)
 			if e == nil {
-				e = b.decode(tx, cpDoc, &cp)
+				e = b.decodeCheckpoint(tx, cpDoc, &cp)
 			}
 			result = store.TaskCommitResult{Task: previous, RunVersion: run.Version, CheckpointVersion: cp.Version}
 			return e
@@ -161,11 +161,11 @@ func (b *Database) ObserveTask(ctx context.Context, req store.ObserveTaskRequest
 		if err != nil {
 			return err
 		}
-		var d document
+		var d taskRecord
 		var t domain.Task
 		err = b.collection(TaskCollection).FindOne(tx, key(run.Scope, req.TaskID)).Decode(&d)
 		if err == nil {
-			err = b.decode(tx, d, &t)
+			err = d.decode(&t)
 		}
 		if err != nil {
 			return err
@@ -237,11 +237,11 @@ func (b *Database) metadata(ctx context.Context, req store.TaskMetadataRequest, 
 		if err != nil {
 			return err
 		}
-		var d document
+		var d taskRecord
 		var t domain.Task
 		err = b.collection(TaskCollection).FindOne(tx, key(run.Scope, req.TaskID)).Decode(&d)
 		if err == nil {
-			err = b.decode(tx, d, &t)
+			err = d.decode(&t)
 		}
 		if err != nil {
 			return err
@@ -329,20 +329,20 @@ func (b *Database) ApplyTask(ctx context.Context, req store.ApplyTaskRequest) (s
 		if err != nil {
 			return err
 		}
-		var td document
+		var td taskRecord
 		var t domain.Task
 		err = b.collection(TaskCollection).FindOne(tx, key(run.Scope, req.TaskID)).Decode(&td)
 		if err == nil {
-			err = b.decode(tx, td, &t)
+			err = td.decode(&t)
 		}
 		if err != nil {
 			return err
 		}
-		var dd document
+		var dd deliveryDocument
 		var delivery domain.TaskDelivery
 		err = b.collection(TaskDeliveryCollection).FindOne(tx, key(run.Scope, req.TaskID)).Decode(&dd)
 		if err == nil {
-			err = b.decode(tx, dd, &delivery)
+			err = dd.decode(&delivery)
 		}
 		if errors.Is(err, mongo.ErrNoDocuments) && t.Status.IsTerminal() {
 			return invariant()
@@ -350,11 +350,11 @@ func (b *Database) ApplyTask(ctx context.Context, req store.ApplyTaskRequest) (s
 		if err != nil {
 			return err
 		}
-		var currentDoc document
+		var currentDoc checkpointDocument
 		var current domain.Checkpoint
 		err = b.collection(CheckpointCollection).FindOne(tx, key(run.Scope, compositeID(run.ID, t.Call.Caller.InvocationID))).Decode(&currentDoc)
 		if err == nil {
-			err = b.decode(tx, currentDoc, &current)
+			err = b.decodeCheckpoint(tx, currentDoc, &current)
 		}
 		if err != nil {
 			return err
@@ -415,7 +415,7 @@ func (b *Database) ApplyTask(ctx context.Context, req store.ApplyTaskRequest) (s
 	return result, nil
 }
 
-func (b *Database) settle(ctx context.Context, d domain.TaskDelivery, old document, state domain.DeliveryState, now time.Time) error {
+func (b *Database) settle(ctx context.Context, d domain.TaskDelivery, old deliveryDocument, state domain.DeliveryState, now time.Time) error {
 	v, err := increment(d.Version)
 	if err != nil {
 		return err
@@ -423,7 +423,7 @@ func (b *Database) settle(ctx context.Context, d domain.TaskDelivery, old docume
 	d.Version = v
 	d.State = state
 	d.SettledAt = &now
-	next, err := repack(old, d, v)
+	next, err := repackDelivery(old, d, v)
 	if err != nil {
 		return err
 	}
@@ -442,11 +442,11 @@ func (b *Database) DiscardTask(ctx context.Context, g store.WriteGuard, id strin
 		return err
 	}
 	err := b.withTransaction(ctx, "discard", func(tx context.Context) error {
-		var dd document
+		var dd deliveryDocument
 		var d domain.TaskDelivery
 		err := b.collection(TaskDeliveryCollection).FindOne(tx, key(g.Lease.Scope, id)).Decode(&dd)
 		if err == nil {
-			err = b.decode(tx, dd, &d)
+			err = dd.decode(&d)
 		}
 		if err != nil {
 			return err
@@ -467,11 +467,11 @@ func (b *Database) DiscardTask(ctx context.Context, g store.WriteGuard, id strin
 		if err = store.CheckVersion(expected, d.Version); err != nil {
 			return err
 		}
-		var td document
+		var td taskRecord
 		var t domain.Task
 		err = b.collection(TaskCollection).FindOne(tx, key(run.Scope, id)).Decode(&td)
 		if err == nil {
-			err = b.decode(tx, td, &t)
+			err = td.decode(&t)
 		}
 		if err != nil {
 			return err

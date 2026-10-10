@@ -18,7 +18,7 @@ import (
 func TestDocumentRoundTripRetainsNilAndBinaryContent(t *testing.T) {
 	for _, parts := range [][]domain.Part{nil, {}, {{Text: string([]byte{0xff, 0x00, 0xfe}), Data: nil}}, {{Data: []byte{}}}, {{Data: []byte{0, 0xff}}}} {
 		value := domain.Task{Scope: testScope, ID: "task", Progress: parts, Result: &domain.ToolResult{CallID: "call", Parts: parts}}
-		d, err := pack(testScope, "task", value, 1)
+		d, err := packTask(testScope, "task", value, 1)
 		check(t, err)
 		var decoded domain.Task
 		err = d.decode(&decoded)

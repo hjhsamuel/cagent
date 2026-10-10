@@ -24,11 +24,11 @@ func (r *Database) SaveSnapshot(ctx context.Context, g store.WriteGuard, next do
 		if run.Status.IsTerminal() {
 			return conflict("run.status")
 		}
-		var sd document
+		var sd sessionDocument
 		var s domain.Session
 		err = r.collection(SessionCollection).FindOne(tx, key(run.Scope, run.SessionID)).Decode(&sd)
 		if err == nil {
-			err = r.decode(tx, sd, &s)
+			err = sd.decode(&s)
 		}
 		if err != nil {
 			return err
@@ -47,7 +47,7 @@ func (r *Database) SaveSnapshot(ctx context.Context, g store.WriteGuard, next do
 		}
 		f := scoped(s.Scope)
 		f["session_id"] = s.ID
-		var docs []document
+		var docs []snapshotDocument
 		cursor, err := r.collection(SnapshotCollection).Find(tx, f, options.Find().SetSort(bson.D{{Key: "version", Value: -1}}).SetLimit(int64(1)).SetCollation(&options.Collation{Locale: "simple"}))
 		if err == nil {
 			defer cursor.Close(tx)
@@ -58,7 +58,7 @@ func (r *Database) SaveSnapshot(ctx context.Context, g store.WriteGuard, next do
 		}
 		current := domain.ContextSnapshot{}
 		if len(docs) > 0 {
-			err = r.decode(tx, docs[0], &current)
+			err = docs[0].decode(&current)
 			if err != nil {
 				return err
 			}
@@ -80,7 +80,7 @@ func (r *Database) SaveSnapshot(ctx context.Context, g store.WriteGuard, next do
 			return err
 		}
 		next.CreatedAt = now
-		d, err := pack(next.Scope, compositeID(s.ID, stringInt(next.Version)), next, next.Version)
+		d, err := packSnapshot(next.Scope, compositeID(s.ID, stringInt(next.Version)), next, next.Version)
 		if err != nil {
 			return err
 		}

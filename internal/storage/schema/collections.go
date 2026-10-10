@@ -1,6 +1,6 @@
 package schema
 
-// 集合名称与文档结构一同维护；业务集合共用 Document 信封。
+// 集合名称与各集合的独立文档结构一同维护。
 const (
 	ToolConnectionCollection  = "tool_connections"
 	ModelCollection           = "models"

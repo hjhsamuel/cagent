@@ -17,11 +17,11 @@ func (b *Database) BindSessionModel(ctx context.Context, scope domain.Scope, id,
 	var result domain.Session
 	err := b.withTransaction(ctx, "session.bind_model", func(tx context.Context) error {
 		result = domain.Session{}
-		var old document
+		var old sessionDocument
 		if err := b.collection(SessionCollection).FindOne(tx, key(scope, id)).Decode(&old); err != nil {
 			return err
 		}
-		if err := b.decode(tx, old, &result); err != nil {
+		if err := old.decode(&result); err != nil {
 			return err
 		}
 		if result.ModelID != "" || result.APIKeyID != "" {
@@ -40,7 +40,7 @@ func (b *Database) BindSessionModel(ctx context.Context, scope domain.Scope, id,
 		if err != nil {
 			return err
 		}
-		doc, err := repack(old, result, version)
+		doc, err := repackSession(old, result, version)
 		if err != nil {
 			return err
 		}

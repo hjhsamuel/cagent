@@ -55,7 +55,7 @@ func (r *Recovery) Scan(ctx context.Context, after *store.RecoveryPosition, limi
 		return out, safeError(err)
 	}
 	defer cur.Close(ctx)
-	var docs []document
+	var docs []runDocument
 	if err = cur.All(ctx, &docs); err != nil {
 		return out, safeError(err)
 	}
@@ -84,11 +84,11 @@ func (r *Recovery) PruneEvents(ctx context.Context, scope domain.Scope, id strin
 		return invalid("event.cursor")
 	}
 	err := r.b.withTransaction(ctx, "events.prune", func(tx context.Context) error {
-		var old document
+		var old runDocument
 		var storedRun domain.Run
 		err := r.b.collection(RunCollection).FindOne(tx, key(scope, id)).Decode(&old)
 		if err == nil {
-			err = r.b.decode(tx, old, &storedRun)
+			err = old.decode(&storedRun)
 		}
 		if err != nil {
 			return err

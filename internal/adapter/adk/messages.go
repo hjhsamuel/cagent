@@ -59,9 +59,20 @@ func (e *modelError) Format(s fmt.State, _ rune) { fmt.Fprint(s, e.Error()) }
 // 工具历史的 ID 按原 Run+CallID 映射，避免不同运行的局部 ID 冲突；原 Task 路由不变。
 // P6 支持文本和既有结构化工具历史；多模态/新工具执行留给 P8，未知内容明确拒绝。
 func mapMessages(messages []domain.Message, name string) (*model.LLMRequest, error) {
+	return mapMessagesForRun(messages, name, "")
+}
+
+// 当前 Run 的调用保留执行 ID，旧 Run 的局部 ID 仍隔离映射。
+func mapMessagesForRun(messages []domain.Message, name, activeRun string) (*model.LLMRequest, error) {
 	req := &model.LLMRequest{Model: name, Config: &genai.GenerateContentConfig{}}
 	type key struct{ run, id string }
 	names := map[key]string{}
+	idFor := func(run, id string) string {
+		if run == activeRun && activeRun != "" {
+			return id
+		}
+		return callID(run, id)
+	}
 	for _, m := range messages {
 		role := "user"
 		switch m.Role {
@@ -94,7 +105,7 @@ func mapMessages(messages []domain.Message, name string) (*model.LLMRequest, err
 					return nil, err
 				}
 				names[key{m.RunID, p.ToolCallID}] = p.ToolName
-				part.FunctionCall = &genai.FunctionCall{ID: callID(m.RunID, p.ToolCallID), Name: p.ToolName, Args: args}
+				part.FunctionCall = &genai.FunctionCall{ID: idFor(m.RunID, p.ToolCallID), Name: p.ToolName, Args: args}
 			case domain.PartToolResult:
 				name := names[key{m.RunID, p.ToolCallID}]
 				if m.Role != domain.RoleTool || name == "" || (p.ToolName != "" && name != p.ToolName) {
@@ -114,7 +125,7 @@ func mapMessages(messages []domain.Message, name string) (*model.LLMRequest, err
 				if p.URI != "" || p.MIMEType != "" {
 					return nil, unsupported("tool.result.artifact")
 				}
-				part.FunctionResponse = &genai.FunctionResponse{ID: callID(m.RunID, p.ToolCallID), Name: name, Response: result}
+				part.FunctionResponse = &genai.FunctionResponse{ID: idFor(m.RunID, p.ToolCallID), Name: name, Response: result}
 			default:
 				return nil, unsupported("message.part.kind")
 			}

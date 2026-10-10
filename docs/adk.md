@@ -16,7 +16,7 @@ ADK 模型由 `pkg/llm/openai.NewModel` 提供，装配时显式选择 `APIChatC
 
 兼容端必须支持文本 Chat Completions SSE 和 `stream_options.include_usage`。主对话与摘要不计算 Token 预算，也不发送 `max_tokens` 或 `max_completion_tokens`。不同厂商的非标准扩展不自动兼容。禁止 HTTP 重定向，避免凭据跟随到另一地址；SDK 自动重试关闭，避免提交结果不确定时重复生成。错误的公开文本为稳定说明；原始 SDK 原因只供内部 `errors.Is/As` 诊断，不可直接打印。
 
-P5 准备与 ADK BeforeModel 使用相同消息映射，系统指令和历史只发送一次；工具历史保持结构化角色和参数，超过 float64 精确范围的整数保持原文。工具 CallID 按原 Run 与局部 ID 映射，领域任务路由不变。
+P5 准备与 ADK BeforeModel 使用相同消息映射，系统指令和历史只发送一次；工具历史保持结构化角色和参数，超过 float64 精确范围的整数保持原文。当前 Run 的工具 CallID 保留执行 ID，旧 Run 的局部 ID 按 Run 隔离映射，领域任务路由不变。
 
 输入不进行本地 Token 计数、窗口校验或裁剪。模型响应中的 usage 保留为事件元数据，prompt_tokens 同事务随完整 assistant 消息持久化。下一轮准备时，最新响应的输入用量达到主模型 `config.window_tokens` 的 80%（可通过 `CAGENT_CONTEXT_COMPRESSION_THRESHOLD_PERCENT` 配置比例）才尝试自动摘要；缺失用量不估算、不累加或沿用旧响应用量。近期轮数只决定摘要范围。
 
@@ -26,15 +26,15 @@ P5 准备与 ADK BeforeModel 使用相同消息映射，系统指令和历史只
 
 文本增量作为 `message.delta` 事件持久化，不追加为历史消息。收到正常 `stop`、完整读取响应并完成 SDK 工作流后，发出一次 `message.completed`；完整 assistant 消息、完成检查点、事件及回执在同一数据库事务提交。客户端应把 completed 看作最终内容，不能再次拼到 delta 后。随后应用提交 `run.completed`。没有正常结束、空回复、截断、拒绝或流错误均不会伪造完成消息。P8 开启工具后使用完整非流式响应，调用/结果成对持久化；返回任务句柄则登记并保持 waiting_tool。文本累计限制为 8 MiB，整体容量治理仍属 P10。
 
-如果最终消息事务提交后、Run 终态提交前服务退出，`RecoverRun` 读取完成检查点，校验版本、作用域、调用身份和模型，恢复 SDK 会话后只结算 Run，不重复调用模型或发布消息。没有完成检查点的中途执行不能通过重新 Execute 冒充恢复，会明确拒绝。取消沿服务 Run context 传递到 SDK 与 HTTP；已持久化的部分事件可重放，取消或故障后不将部分文本写成完整历史。
+如果最终消息事务提交后、Run 终态提交前服务退出，`RecoverRun` 读取与最终消息同事务提交的应用完成记录，校验版本、作用域、调用身份、模型和最终消息后只结算 Run，不重复调用模型或发布消息。没有安全边界的中途执行不能通过重新 Execute 冒充恢复，会明确拒绝。取消沿服务 Run context 传递到 SDK 与 HTTP；已持久化的部分事件可重放，取消或故障后不将部分文本写成完整历史。
 
-## 检查点与真实 SDK 恢复验证
+## 应用恢复记录
 
-格式固定为 `adk-go/2.4.0/completed/v1`。载荷包含 SDK 事件、最终状态、最终事件 ID、模型及领域身份，不包含客户端配置或 API 密钥。SDK 会话可能包含业务内容，应沿用数据库访问控制。恢复时先重放事件，再应用最终状态；不序列化 goroutine 或迭代器。未知格式、错误身份、有待完成调用的检查点拒绝恢复。
+恢复不依赖 adk-go 的 Session、事件或工作流状态。暂停记录 `cagent.tools/v1` 保存领域 LLM 消息（系统上下文、assistant 调用、tool 结果）、整批工具调用/句柄、模型调用计数及安全失败分类。TaskStore 保存原任务状态和结果，TaskDelivery/ApplyTask 原子接纳结果并更新消息与恢复记录。全部依赖到齐后创建全新的 Runner，由 BeforeModel 注入重建历史；已执行调用 ID 加入去重集合，禁止再次执行。
 
-`checkpoint_test.go` 使用真实 ADK Runner、长运行函数工具和会话服务：触发暂停，将实际事件/状态序列化，创建全新服务与 Runner，提交匹配的工具结果，验证继续生成且工具没有重执行。模型响应由测试替身提供，但暂停、序列化、恢复控制流由真实 SDK 执行。依据 [ADK v2.4.0 Runner 实现](https://github.com/google/adk-go/blob/v2.4.0/runner/run_node.go) 核对恢复边界。
+完成记录 `cagent.completed/v1` 保存模型、领域身份与最终消息，和最终输出同事务提交。新记录不包含 SDK 数据，格式不随 ADK 版本变化。旧 `cagent.adk.tools.v2` 可读取其实际 LLM 历史并迁移，忽略 SDK 字段；只有 SDK 状态、没有实际 LLM 历史的 v1 及旧 SDK 完成格式明确返回 Unsupported，不盲目重放工具。
 
-该探针只确认 SDK 能力；P9 另以生产 `Runtime.Resume` 和真实 MongoDB 验证 TaskDelivery 原子接纳、双任务续接与重启。应用按 Invocation 调度已有分支，SDK 测试验证精确 Caller 关联；SDK 升级必须重新验证格式与恢复行为。多模态模型输入仍未实现。
+`checkpoint_test.go` 从完全没有 SDK 状态的领域消息和工具记录验证重建、整数精度、调用次数限制、记录一致性及旧 v2 迁移。`resume_test.go` 验证双任务乱序接纳、提交失败、重复消费拒绝和新 Runtime 续接；应用层使用真实 MongoDB 验证 TaskDelivery 原子接纳、部分登记后的崩溃修复及完成结算。多模态模型输入仍未实现。
 
 ## 验证方式
 

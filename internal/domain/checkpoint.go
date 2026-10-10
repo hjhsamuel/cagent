@@ -6,8 +6,8 @@ import (
 	"github.com/hjhsamuel/cagent/internal/apperrors"
 )
 
-// Checkpoint 保存一个 Agent/Subagent 调用分支的可恢复状态，不解释 SDK 数据格式。
-// 唯一键为 Scope + RunID + Caller.InvocationID；Format 标识适配器及编码版本。
+// Checkpoint 保存一个 Agent/Subagent 调用分支的应用恢复记录。
+// 唯一键为 Scope + RunID + Caller.InvocationID；Format 标识应用编码版本。
 // PendingCallIDs 是当前检查点尚未消费的工具调用集合，允许并行任务；消费某任务
 // 必须仅移除对应调用。Data 可能包含私有上下文，仅限可信运行时和存储适配器使用。
 // Version=0 表示尚未创建；首次保存为 1，此后由存储在 CAS 成功时递增。
@@ -25,8 +25,8 @@ type Checkpoint struct {
 	UpdatedAt      time.Time
 }
 
-// ValidateForRun 校验作用域和分支身份，不验证 SDK 检查点是否真正可恢复。
-// Data 允许为空（部分 SDK 用引用或空初始状态），Format 必须显式指定。
+// ValidateForRun 校验作用域和分支身份，恢复记录内容由运行时校验。
+// Data 允许为空（引用或空初始状态），Format 必须显式指定。
 func (c Checkpoint) ValidateForRun(run Run) error {
 	if err := validateModelBinding(c.ModelID, c.APIKeyID); err != nil {
 		return err

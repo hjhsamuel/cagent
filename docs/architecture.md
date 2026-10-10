@@ -12,7 +12,7 @@ MCP 使用官方 modelcontextprotocol/go-sdk v1.8.0，固定 2025-11-25 Streamab
 
 TaskClient 的观察参数从 Scope 扩展为原 ToolCall，结果可按原 CallID 关联；调用方必须先按认证 Scope 读取持久 Task。新增 TaskInteractor，JWT 路由 `/tasks/:taskID/input` 和 `/tasks/:taskID/authorization` 仅引用本地任务 ID，后者只接受可信凭据引用。应用拒绝终态 Run，确认远端暂停后补充原任务；202 不表示终态或本地恢复。
 
-ADK 工具定义随每轮模型请求发送，不计算 Token 预算；有工具声明时使用完整非流式 Chat Completions，避免未完整参数触发执行。即时调用/结果以 assistant/tool 角色成对持久化；任务句柄触发真实 SDK 暂停检查点，经 Update.Tasks 和当前 Fence 下的 TrackTask 事务交接。ErrWaiting 保留 Run waiting_tool 与会话占用，不提交 completed。多任务逐个登记，SDK 检查点 Data 保留整批句柄，P9 已从整批持久句柄补齐部分登记，不重执行工具。
+ADK 工具定义随每轮模型请求发送，不计算 Token 预算；有工具声明时使用完整非流式 Chat Completions，避免未完整参数触发执行。即时调用/结果以 assistant/tool 角色成对持久化；任务句柄和应用恢复记录经 Update.Tasks 及当前 Fence 下的 TrackTask 事务交接。ErrWaiting 保留 Run waiting_tool 与会话占用，不提交 completed。多任务逐个登记，恢复记录保留整批调用/句柄和 LLM 消息，P9 从这些记录补齐部分登记，不重执行工具。
 
 P9 已接入持续观察、生产 Runtime.Resume、TaskDelivery 原子消费与启动恢复扫描。真实 ADK、本地 MCP/A2A HTTP/SSE 提供方及 MongoDB 双任务持久化已验证，外部提供方未配置。
 
@@ -154,7 +154,7 @@ internal/
   apperrors/              # 公共错误类别、安全详情及原因链
   store/                  # 请求、结果与纯校验，无仓储接口
   adapter/mongodb/        # 已实现：仓储、索引、事务、租约、恢复管理
-  adapter/adk/            # 模型、工具桥接及 SDK 检查点
+  adapter/adk/            # 模型、工具桥接及应用恢复记录
   adapter/mcp/            # MCP 2025-11-25 Streamable HTTP
   adapter/a2a/            # A2A 0.3.0 JSON-RPC 客户端
   adapter/toolhttp/       # SDK 共用 HTTP 安全策略（无协议实现）
@@ -218,7 +218,7 @@ Update.Message 表示完整 assistant 消息，与事件一起提交；运行时
 
 ## ADK、MCP 与 A2A
 
-ADK 适配器负责实例化 Agent、消息/事件转换、工具桥接，以及将 SDK 会话和应用持久化会话关联。当前锁定 ADK v2.4.0、OpenAI Go v3.66.0。每个 Run 使用独立 SDK 会话，MongoDB 保存版本化事件/状态检查点；完成输出的检查点与消息原子提交，恢复只结算 Run。真实 SDK 长工具暂停、序列化及新 Runner 恢复已通过行为探针；P9 已实现生产 TaskDelivery 原子接纳及新 Runner 恢复。实现与验收限制见 [ADK 接入说明](adk.md)。
+ADK 适配器负责实例化 Agent、消息/事件转换及工具桥接。当前锁定 ADK v2.4.0、OpenAI Go v3.66.0。每次执行使用全新 SDK 会话；恢复由应用 LLM 交互消息、TaskStore、工具调用/句柄及 TaskDelivery 重建，不保存或恢复 ADK Session、事件或工作流状态。完成记录与最终消息原子提交，恢复只结算 Run；任务结果原子接纳后，向全新 Runner 注入重建历史。实现与验收限制见 [ADK 接入说明](adk.md)。
 
 MCP 适配器负责工具发现、协议连接、凭据隔离、超时和输出转换。A2A 初期定位为调用远程 Agent 的客户端，负责远程能力发现、任务状态和取消映射；对外提供 A2A 服务端不是当前骨架范围，可后续增加 transport 适配器。远程连接配置由可信管理配置提供，工具访问在执行前进行授权。
 
@@ -242,7 +242,7 @@ Agent 与 Subagent 使用同一工具调用边界。`Executor.Execute` 返回 `T
 - 服务重启后，由服务内运行恢复流程加载未完成 Run、Agent 检查点及未交付 Task，重新跟踪同一任务句柄。多实例协调使用 Run 的占用和版本约束，任务本身没有用于执行的领取租约。
 - 原调用启动成功但句柄尚未落库的故障窗口，需要提供方幂等键或可按调用关联查询任务来协调；提供方不支持时记录不确定状态，不能盲目重启工具造成重复副作用。
 - Run 的幂等键唯一范围为 Scope + SessionID；Task 以 Scope + RunID + InvocationID + ToolCall ID 去重。远端句柄通过 Scope + Protocol + ConnectionID + RemoteID 定位。
-- P2 定义且 P3 已实现两步事务：终态 Task 与 pending TaskDelivery 一起提交；消费时检查点、AppliedAt、delivery=applied、消息/事件及幂等回执一起提交。取消 Run 后以 discarded 结算交付，不设置 AppliedAt，不继续生成。真实事务故障与独立客户端竞争测试已通过；P9 已接通实际 SDK 续接，无需独立任务 Worker。
+- P2 定义且 P3 已实现两步事务：终态 Task 与 pending TaskDelivery 一起提交；消费时检查点、AppliedAt、delivery=applied、消息/事件及幂等回执一起提交。取消 Run 后以 discarded 结算交付，不设置 AppliedAt，不继续生成。真实事务故障与独立客户端竞争测试已通过；P9 已接通应用消息重建后的模型续接，无需独立任务 Worker。
 - 取消先记录 CancelRequestedAt 并向提供方请求；仅在提供方确认后更新远端任务终态。Run 显式取消后禁止继续模型生成，迟到结果仍可留存。提供方不支持取消或完成与取消发生竞争时，应保留实际远端状态。
 - 上下文中保留待完成 ToolCall 与任务关联，进度通过 SSE 展示，不无限追加到模型历史；最终结果与原调用配对。HTTP/SSE 断连不影响任务跟踪。
 
@@ -265,9 +265,9 @@ Session.ActiveRunID 是会话占用，租约到期或 Release 不释放它；只
 
 消息按会话、事件按 Run 从 1 起分配序号，计数器与内容一起提交；分页排他且有界。事件存储保留 PrunedThrough 连续前缀水位，旧游标返回 store.ErrCursorExpired，未来游标报参数无效；清理和水位原子协调，不使用无协调的逐条 TTL 删除。
 
-检查点按 Scope+RunID+InvocationID 保存 SDK 不透明状态，消费只移除当前 ToolCall ID，保留同分支其他未完成调用。pending 交付表示已启动工具的结果待续接，不是执行队列。Recovery.Scan 是只注入内部恢复循环的独立管理能力，返回完整 Scope 的候选；普通仓储永不接受空 Scope。恢复需获取租约并重新读取，扫描分页到末尾后重头开始。
+应用恢复记录按 Scope+RunID+InvocationID 保存领域 LLM 消息、整批工具调用/句柄及调用次数，消费只移除当前 ToolCall ID，保留同分支其他未完成调用。pending 交付表示已启动工具的结果待续接，不是执行队列。Recovery.Scan 是只注入内部恢复循环的独立管理能力，返回完整 Scope 的候选；普通仓储永不接受空 Scope。恢复需获取租约并重新读取，扫描分页到末尾后重头开始。
 
-P2 不保证外部模型/工具副作用恰好一次。SDK 必须支持先持久化已接纳结果的检查点，再推进后续执行；P6 验证真实能力，不以模拟恢复代替。
+P2 不保证外部模型/工具副作用恰好一次。应用先原子持久化已接纳的结果消息、恢复记录和消费标记，再从消息及执行记录推进模型；不依赖 SDK 的恢复能力。
 
 ## 已实现：MongoDB 适配与数据布局
 
@@ -353,7 +353,7 @@ Runtime.Resume 只接纳一个精确匹配 Scope/Run/Caller/ToolCall 的终态�
 
 CompressingBuilder 先校验完整历史，按当前策略选择快照；策略版本变化从原始前缀重建，兼容快照结合旧摘要和新增前缀进行增量摘要。摘要独立选择模型和凭据，采用所选文档的端点与超时；历史编码为不可信 JSON 资料，无工具声明。每次准备最多调用一次摘要模型，失败或空摘要时回退到原输入，不分段或重试。
 
-Prepare 返回待保存候选和读取时的会话版本，不持有写权限。应用保持租约续期，在写锁内使用 SaveSnapshot 校验 Fence、Run/Session/快照版本和 ThroughSequence 单调水位；成功刷新 Run.Version 后才交给主运行时。不同实例的过时候选不能覆盖新历史。原始历史永不删除。已有 SDK 检查点恢复不重新压缩，避免破坏精确任务续接；工具循环保留调用次数限制和结构化历史。
+Prepare 返回待保存候选和读取时的会话版本，不持有写权限。应用保持租约续期，在写锁内使用 SaveSnapshot 校验 Fence、Run/Session/快照版本和 ThroughSequence 单调水位；成功刷新 Run.Version 后才交给主运行时。不同实例的过时候选不能覆盖新历史。原始历史永不删除。已有应用恢复记录重建不重新压缩，避免破坏精确任务续接；工具循环保留调用次数限制和结构化历史。
 
 详细配置、回退、验证及真实提供方限制见 [上下文说明](context.md)。
 

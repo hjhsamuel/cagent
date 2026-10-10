@@ -6,7 +6,7 @@ import (
 	"io"
 )
 
-// decodeJSON preserves arbitrary JSON numbers through SDK snapshots and restart.
+// decodeJSON preserves arbitrary JSON numbers through application records and restart.
 func decodeJSON(data []byte, out any) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()

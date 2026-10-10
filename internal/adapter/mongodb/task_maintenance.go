@@ -28,12 +28,12 @@ func (b *Database) RecordTaskMaintenance(ctx context.Context, g store.WriteGuard
 		if err != nil {
 			return err
 		}
-		var td document
+		var td taskRecord
 		var t domain.Task
 		if err = b.collection(TaskCollection).FindOne(tx, key(run.Scope, id)).Decode(&td); err != nil {
 			return err
 		}
-		if err = b.decode(tx, td, &t); err != nil {
+		if err = td.decode(&t); err != nil {
 			return err
 		}
 		if err = t.ValidateForRun(run); err != nil {
@@ -147,7 +147,7 @@ func (b *Database) MaintenanceDelay(ctx context.Context, scope domain.Scope, id 
 	f := scoped(scope)
 	f["run_id"] = id
 	f["unsettled"] = 1
-	var d document
+	var d taskRecord
 	if err := b.collection(TaskCollection).FindOne(ctx, f, options.FindOne().SetSort(bson.D{{Key: "next_action_at", Value: 1}}).SetProjection(bson.M{"next_action_at": 1})).Decode(&d); err != nil {
 		return fallback, safeError(err)
 	}
@@ -169,12 +169,13 @@ func (b *Database) ResumeTaskMaintenance(ctx context.Context, scope domain.Scope
 	}
 	var task domain.Task
 	err := b.withTransaction(ctx, "task.maintenance_resume", func(tx context.Context) error {
-		var td, rd document
+		var td taskRecord
+		var rd runDocument
 		var run domain.Run
 		if err := b.collection(TaskCollection).FindOne(tx, key(scope, id)).Decode(&td); err != nil {
 			return err
 		}
-		if err := b.decode(tx, td, &task); err != nil {
+		if err := td.decode(&task); err != nil {
 			return err
 		}
 		if task.Maintenance != domain.MaintenanceQuarantined {
@@ -183,7 +184,7 @@ func (b *Database) ResumeTaskMaintenance(ctx context.Context, scope domain.Scope
 		if err := b.collection(RunCollection).FindOne(tx, key(scope, task.Call.RunID)).Decode(&rd); err != nil {
 			return err
 		}
-		if err := b.decode(tx, rd, &run); err != nil {
+		if err := rd.decode(&run); err != nil {
 			return err
 		}
 		if err := task.ValidateForRun(run); err != nil {

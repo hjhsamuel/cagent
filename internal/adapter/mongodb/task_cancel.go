@@ -14,12 +14,12 @@ func (b *Database) CancelTask(ctx context.Context, scope domain.Scope, id string
 		return result, e
 	}
 	e := b.withTransaction(ctx, "task.cancel_request", func(tx context.Context) error {
-		var td document
+		var td taskRecord
 		var task domain.Task
 		if e := b.collection(TaskCollection).FindOne(tx, key(scope, id)).Decode(&td); e != nil {
 			return e
 		}
-		if e := b.decode(tx, td, &task); e != nil {
+		if e := td.decode(&task); e != nil {
 			return e
 		}
 		now, e := b.now(tx)
@@ -34,12 +34,12 @@ func (b *Database) CancelTask(ctx context.Context, scope domain.Scope, id string
 		if !changed {
 			return nil
 		}
-		var rd document
+		var rd runDocument
 		var run domain.Run
 		if e = b.collection(RunCollection).FindOne(tx, key(scope, task.Call.RunID)).Decode(&rd); e != nil {
 			return e
 		}
-		if e = b.decode(tx, rd, &run); e != nil {
+		if e = rd.decode(&run); e != nil {
 			return e
 		}
 		task.Version, e = increment(task.Version)

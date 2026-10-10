@@ -18,7 +18,7 @@ import (
 	"google.golang.org/genai"
 )
 
-// ToolOptions 是可信装配入口。Handoff 在 SDK 暂停快照可用后同步调用，注入方负责
+// ToolOptions 是可信装配入口。Handoff 在应用恢复记录可用后同步调用，注入方负责
 // 原子 TrackTask。默认由 Emit 保存句柄及检查点，Run 等待后由服务持续观察。
 // MaxModelCalls 限制工具循环，不限制远端任务寿命。
 type ToolOptions struct {
@@ -32,18 +32,15 @@ type PendingTool struct {
 }
 type PendingTools []PendingTool
 
-const PendingCheckpointFormat = "cagent.adk.tools.v2"
-const legacyPendingCheckpointFormat = "cagent.adk.tools.v1"
+const PendingCheckpointFormat = "cagent.tools/v1"
+const legacyPendingCheckpointFormat = "cagent.adk.tools.v2"
 
 func IsPendingCheckpoint(cp domain.Checkpoint) bool {
 	return cp.Format == PendingCheckpointFormat || cp.Format == legacyPendingCheckpointFormat
 }
 
 type pendingCheckpoint struct {
-	// Contents 保存实际发给模型的历史，Results 保存已经原子接纳的工具响应。
-	// 与 SDK 快照同时持久化，避免恢复时使用占位响应或重复发送旧工具调用。
-	Contents   []*genai.Content
-	Results    map[string]*genai.FunctionResponse
+	// Messages 保存实际 LLM 交互，包括调用及已原子接纳的结果；不保存 SDK 状态。
 	ModelCalls int
 	// Model 与准备后消息保留暂停时的模型/上下文，不依赖恢复时已经变化的配置或摘要。
 	Model    string
@@ -51,7 +48,6 @@ type pendingCheckpoint struct {
 	Scope    domain.Scope
 	RunID    string
 	Caller   domain.AgentExecution
-	SDK      sdkSnapshot
 	Tools    PendingTools
 	// Failure is a safe classification, never a provider diagnostic or credential.
 	Failure string `json:",omitempty"`
@@ -170,16 +166,21 @@ func (r *Runtime) tools(ctx context.Context, req agent.Request, state *toolRun) 
 // toolEvent 持久化完整调用/结果对。任务句柄不生成最终工具结果；未完成调用留在历史。
 func toolEvent(ctx context.Context, emit agent.Emit, content *genai.Content, state *toolRun, promptTokens int32) (bool, error) {
 	var calls, results []domain.Part
+	hasCall := false
 	for _, p := range content.Parts {
 		if p == nil {
 			continue
 		}
 		if f := p.FunctionCall; f != nil {
+			hasCall = true
 			data, e := json.Marshal(f.Args)
 			if e != nil {
 				return true, e
 			}
 			calls = append(calls, domain.Part{Kind: domain.PartToolCall, ToolCallID: f.ID, ToolName: f.Name, Data: data})
+		}
+		if p.Text != "" && !p.Thought && p.FunctionCall == nil && p.FunctionResponse == nil {
+			calls = append(calls, domain.Part{Kind: domain.PartText, Text: p.Text})
 		}
 		if f := p.FunctionResponse; f != nil {
 			pending := false
@@ -200,7 +201,7 @@ func toolEvent(ctx context.Context, emit agent.Emit, content *genai.Content, sta
 			results = append(results, domain.Part{Kind: domain.PartToolResult, ToolCallID: f.ID, ToolName: f.Name, Data: data})
 		}
 	}
-	if len(calls) > 0 {
+	if hasCall {
 		if e := emit(ctx, agent.Update{Kind: domain.EventToolStarted, Message: calls, PromptTokens: promptTokens}); e != nil {
 			return true, e
 		}

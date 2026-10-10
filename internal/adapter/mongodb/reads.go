@@ -18,11 +18,11 @@ func (r *Database) GetSession(ctx context.Context, s domain.Scope, id string) (d
 	}
 	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
-	var vDoc document
+	var vDoc sessionDocument
 	var v domain.Session
 	err := r.collection(SessionCollection).FindOne(ctx, key(s, id)).Decode(&vDoc)
 	if err == nil {
-		err = r.decode(ctx, vDoc, &v)
+		err = vDoc.decode(&v)
 	}
 	return v, safeError(err)
 }
@@ -34,11 +34,11 @@ func (r *Database) GetRun(ctx context.Context, s domain.Scope, id string) (domai
 	}
 	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
-	var vDoc document
+	var vDoc runDocument
 	var v domain.Run
 	err := r.collection(RunCollection).FindOne(ctx, key(s, id)).Decode(&vDoc)
 	if err == nil {
-		err = r.decode(ctx, vDoc, &v)
+		err = vDoc.decode(&v)
 	}
 	return v, safeError(err)
 }
@@ -50,11 +50,11 @@ func (r *Database) GetTask(ctx context.Context, s domain.Scope, id string) (doma
 	}
 	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
-	var vDoc document
+	var vDoc taskRecord
 	var v domain.Task
 	err := r.collection(TaskCollection).FindOne(ctx, key(s, id)).Decode(&vDoc)
 	if err == nil {
-		err = r.decode(ctx, vDoc, &v)
+		err = vDoc.decode(&v)
 	}
 	return v, safeError(err)
 }
@@ -66,11 +66,11 @@ func (r *Database) GetTaskDelivery(ctx context.Context, s domain.Scope, id strin
 	}
 	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
-	var vDoc document
+	var vDoc deliveryDocument
 	var v domain.TaskDelivery
 	err := r.collection(TaskDeliveryCollection).FindOne(ctx, key(s, id)).Decode(&vDoc)
 	if err == nil {
-		err = r.decode(ctx, vDoc, &v)
+		err = vDoc.decode(&v)
 	}
 	return v, safeError(err)
 }
@@ -88,11 +88,11 @@ func (r *Database) GetCheckpoint(ctx context.Context, s domain.Scope, runID, inv
 	f := scoped(s)
 	f["run_id"] = runID
 	f["invocation_id"] = invocationID
-	var vDoc document
+	var vDoc checkpointDocument
 	var v domain.Checkpoint
 	err := r.collection(CheckpointCollection).FindOne(ctx, f).Decode(&vDoc)
 	if err == nil {
-		err = r.decode(ctx, vDoc, &v)
+		err = r.decodeCheckpoint(ctx, vDoc, &v)
 	}
 	return v, safeError(err)
 }
@@ -110,11 +110,11 @@ func (r *Database) FindRunByKey(ctx context.Context, s domain.Scope, sessionID, 
 	f := scoped(s)
 	f["session_id"] = sessionID
 	f["idempotency_key"] = idem
-	var vDoc document
+	var vDoc runDocument
 	var v domain.Run
 	err := r.collection(RunCollection).FindOne(ctx, f).Decode(&vDoc)
 	if err == nil {
-		err = r.decode(ctx, vDoc, &v)
+		err = vDoc.decode(&v)
 	}
 	return v, safeError(err)
 }
@@ -137,7 +137,7 @@ func (r *Database) CreateSession(ctx context.Context, s domain.Session) error {
 		value.Version = 1
 		value.CreatedAt = now
 		value.UpdatedAt = now
-		d, err := pack(s.Scope, s.ID, value, 1)
+		d, err := packSession(s.Scope, s.ID, value, 1)
 		if err != nil {
 			return err
 		}
@@ -160,11 +160,11 @@ func (r *Database) ListMessages(ctx context.Context, s domain.Scope, id string, 
 	commitErr := r.withTransaction(ctx, "messages.list", func(tx context.Context) error {
 		result = store.MessagePage{} // 每次重试独立构造结果，失败尝试不向调用方泄漏。
 		out := store.MessagePage{NextAfter: p.After}
-		var session document
+		var session sessionDocument
 		var storedSession domain.Session
 		err := r.collection(SessionCollection).FindOne(tx, key(s, id)).Decode(&session)
 		if err == nil {
-			err = r.decode(tx, session, &storedSession)
+			err = session.decode(&storedSession)
 		}
 		if err != nil {
 			return err
@@ -175,7 +175,7 @@ func (r *Database) ListMessages(ctx context.Context, s domain.Scope, id string, 
 		f := scoped(s)
 		f["session_id"] = id
 		f["sequence"] = bson.M{"$gt": p.After}
-		var docs []document
+		var docs []messageDocument
 		cursor, err := r.collection(MessageCollection).Find(tx, f, options.Find().SetSort(bson.D{{Key: "sequence", Value: 1}}).SetLimit(int64(p.Limit+1)).SetCollation(&options.Collation{Locale: "simple"}))
 		if err == nil {
 			defer cursor.Close(tx)
@@ -190,7 +190,7 @@ func (r *Database) ListMessages(ctx context.Context, s domain.Scope, id string, 
 		}
 		for _, d := range docs {
 			var v domain.Message
-			err := r.decode(tx, d, &v)
+			err := d.decode(&v)
 			if err != nil {
 				return err
 			}
@@ -219,11 +219,11 @@ func (r *Database) ListEvents(ctx context.Context, s domain.Scope, id string, p 
 	commitErr := r.withTransaction(ctx, "events.list", func(tx context.Context) error {
 		result = store.EventPage{} // 每次重试独立构造结果，失败尝试不向调用方泄漏。
 		out := store.EventPage{NextAfter: p.After}
-		var run document
+		var run runDocument
 		var storedRun domain.Run
 		err := r.collection(RunCollection).FindOne(tx, key(s, id)).Decode(&run)
 		if err == nil {
-			err = r.decode(tx, run, &storedRun)
+			err = run.decode(&storedRun)
 		}
 		if err != nil {
 			return err
@@ -237,7 +237,7 @@ func (r *Database) ListEvents(ctx context.Context, s domain.Scope, id string, p 
 		f := scoped(s)
 		f["run_id"] = id
 		f["sequence"] = bson.M{"$gt": p.After}
-		var docs []document
+		var docs []eventDocument
 		cursor, err := r.collection(EventCollection).Find(tx, f, options.Find().SetSort(bson.D{{Key: "sequence", Value: 1}}).SetLimit(int64(p.Limit+1)).SetCollation(&options.Collation{Locale: "simple"}))
 		if err == nil {
 			defer cursor.Close(tx)
@@ -252,7 +252,7 @@ func (r *Database) ListEvents(ctx context.Context, s domain.Scope, id string, p 
 		}
 		for _, d := range docs {
 			var v domain.Event
-			err := r.decode(tx, d, &v)
+			err := d.decode(&v)
 			if err != nil {
 				return err
 			}
@@ -281,11 +281,11 @@ func (r *Database) ListUnsettledTasks(ctx context.Context, s domain.Scope, id st
 	commitErr := r.withTransaction(ctx, "tasks.list", func(tx context.Context) error {
 		result = store.TaskPage{} // 每次重试独立构造结果，失败尝试不向调用方泄漏。
 		out := store.TaskPage{NextAfter: p.After}
-		var value1629Doc document
+		var value1629Doc runDocument
 		var storedRun domain.Run
 		err := r.collection(RunCollection).FindOne(tx, key(s, id)).Decode(&value1629Doc)
 		if err == nil {
-			err = r.decode(tx, value1629Doc, &storedRun)
+			err = value1629Doc.decode(&storedRun)
 		}
 		if err != nil {
 			return err
@@ -294,7 +294,7 @@ func (r *Database) ListUnsettledTasks(ctx context.Context, s domain.Scope, id st
 		f["run_id"] = id
 		f["unsettled"] = 1
 		f["id"] = bson.M{"$gt": p.After}
-		var docs []document
+		var docs []taskRecord
 		cursor, err := r.collection(TaskCollection).Find(tx, f, options.Find().SetSort(bson.D{{Key: "id", Value: 1}}).SetLimit(int64(p.Limit+1)).SetCollation(&options.Collation{Locale: "simple"}))
 		if err == nil {
 			defer cursor.Close(tx)
@@ -309,16 +309,16 @@ func (r *Database) ListUnsettledTasks(ctx context.Context, s domain.Scope, id st
 		}
 		for _, d := range docs {
 			var t domain.Task
-			err := r.decode(tx, d, &t)
+			err := d.decode(&t)
 			if err != nil {
 				return err
 			}
 			if t.Status.IsTerminal() {
-				var deliveryDoc document
+				var deliveryDoc deliveryDocument
 				var delivery domain.TaskDelivery
 				err := r.collection(TaskDeliveryCollection).FindOne(tx, key(s, t.ID)).Decode(&deliveryDoc)
 				if err == nil {
-					err = r.decode(tx, deliveryDoc, &delivery)
+					err = deliveryDoc.decode(&delivery)
 				}
 				if err != nil {
 					if errors.Is(err, mongo.ErrNoDocuments) {
@@ -352,7 +352,7 @@ func (r *Database) LatestSnapshot(ctx context.Context, s domain.Scope, id string
 	defer cancel()
 	f := scoped(s)
 	f["session_id"] = id
-	var docs []document
+	var docs []snapshotDocument
 	cursor, err := r.collection(SnapshotCollection).Find(ctx, f, options.Find().SetSort(bson.D{{Key: "version", Value: -1}}).SetLimit(int64(1)).SetCollation(&options.Collation{Locale: "simple"}))
 	if err == nil {
 		defer cursor.Close(ctx)
@@ -365,6 +365,6 @@ func (r *Database) LatestSnapshot(ctx context.Context, s domain.Scope, id string
 		return domain.ContextSnapshot{}, safeError(mongo.ErrNoDocuments)
 	}
 	var v domain.ContextSnapshot
-	err = r.decode(ctx, docs[0], &v)
+	err = docs[0].decode(&v)
 	return v, safeError(err)
 }

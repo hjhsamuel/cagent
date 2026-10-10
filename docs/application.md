@@ -20,7 +20,7 @@
 
 默认请求准备按页读取原始会话历史（已包含当前输入，不再追加第二份），调用身份默认 AgentID 来自会话、InvocationID 为 Run ID。`Options.Prepare` 可直接注入 P5 的 `NewContextPreparer`，详见 [上下文说明](context.md)；返回的 Run 不得改变、Caller 必须有效。真实模型装配采用上下文准备器，校验历史与工具关联，不计算 Token 预算。
 
-`RecoverRun(ctx, scope, runID)` 是 P9 扫描器可调用的接入点，返回表示调度已接纳，不表示租约已领取或恢复已完成。queued Run 可以首次 Execute；running/waiting Run 必须配置 `Options.Recover`，否则返回能力不支持，绝不重新 Execute。Recover 回调负责读取原分支检查点并恢复，Prepare 可预先加载检查点。P6/P9 已验证真实 SDK 检查点恢复、长任务等待聚合、原子交付和跨租户扫描循环。终态 Run 的任务由维护租约继续观察，迟到交付被丢弃，详见 [长任务与恢复](tasks.md)。
+`RecoverRun(ctx, scope, runID)` 是 P9 扫描器可调用的接入点，返回表示调度已接纳，不表示租约已领取或恢复已完成。queued Run 可以首次 Execute；running/waiting Run 必须配置 `Options.Recover`，否则返回能力不支持，绝不重新 Execute。Recover 回调负责读取原分支检查点并恢复，Prepare 可预先加载检查点。P6/P9 已验证应用消息和工具记录重建、长任务等待聚合、原子交付和跨租户扫描循环。终态 Run 的任务由维护租约继续观察，迟到交付被丢弃，详见 [长任务与恢复](tasks.md)。
 
 ## 订阅与部署
 

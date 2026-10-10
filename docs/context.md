@@ -42,7 +42,7 @@
 
 生成前应用在写锁内调用 `Database.SaveSnapshot`，同事务校验租约 Owner/Fence/有效期、Run.Version、读取时 Session.Version、最新快照 Version 及覆盖水位。成功后刷新 Run.Version，再调用主模型；保存失败不发主模型请求，结果未知时停止执行并遵循既有恢复规则。过时候选不能覆盖新历史，原始消息始终保留。
 
-只有没有 SDK 检查点的新 Run 才准备摘要上下文；已有检查点按原 Invocation/ToolCall 恢复，不修改待完成任务状态，不重新 Execute 已启动任务。
+只有没有应用恢复记录的新 Run 才准备摘要上下文；已有检查点按原 Invocation/ToolCall 恢复，不修改待完成任务状态，不重新 Execute 已启动任务。
 
 ## 验证
 
